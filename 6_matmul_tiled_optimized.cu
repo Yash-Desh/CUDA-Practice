@@ -15,6 +15,9 @@ using std::chrono::high_resolution_clock;
 // Block dimension : 32x32
 #define TILE_DIM 32
 
+// declare an arbitrary coarsening factor
+#define COARSE_FACTOR 4
+
 // prints all the elements of given array
 void printArr(float *arr, int size)
 {
@@ -25,74 +28,85 @@ void printArr(float *arr, int size)
     std::cout << std::endl;
 }
 
-
 // performs matrix multiplication on the CPU
 void matmul_tiled_cpu(float *A, float *B, float *C, unsigned int N)
 {
     // loop over every row tile
-    for(int row_tile=0; row_tile<N/TILE_DIM; row_tile++)
+    for (int row_tile = 0; row_tile < N / TILE_DIM; row_tile++)
     {
         // loop over every col tile
-        for(int col_tile=0; col_tile<N/TILE_DIM; col_tile++)
+        for (int col_tile = 0; col_tile < N / TILE_DIM; col_tile++)
         {
             // loop over every input tile
-            for (int i_tile = 0; i_tile < N/TILE_DIM; i_tile++)
+            for (int i_tile = 0; i_tile < N / TILE_DIM; i_tile++)
             {
                 // loop over every row within the tile
-                for(int row = row_tile*TILE_DIM; row < (row_tile+1)*TILE_DIM; row++)
+                for (int row = row_tile * TILE_DIM; row < (row_tile + 1) * TILE_DIM; row++)
                 {
                     // loop over every col withing the tile
-                    for(int col = col_tile*TILE_DIM; col < (col_tile+1)*TILE_DIM; col++)
+                    for (int col = col_tile * TILE_DIM; col < (col_tile + 1) * TILE_DIM; col++)
                     {
                         float sum = 0.0f;
-                        for (int i = i_tile * TILE_DIM; i < (i_tile+1)*TILE_DIM; i++)
+                        for (int i = i_tile * TILE_DIM; i < (i_tile + 1) * TILE_DIM; i++)
                         {
-                            sum += A[row*N + i]* B[i*N + col];
+                            sum += A[row * N + i] * B[i * N + col];
                         }
-                        if(i_tile == 0)
+                        if (i_tile == 0)
                         {
-                            C[row*N + col] = sum;
+                            C[row * N + col] = sum;
                         }
                         else
                         {
-                            C[row*N + col] += sum;
+                            C[row * N + col] += sum;
                         }
                     }
                 }
             }
-            
         }
     }
 }
 
 __global__ void matmul_tiled_kernel(float *A, float *B, float *C, unsigned int N)
 {
-    // NOTE : 1 thread per output matrix
-    unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
-    unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
-
-    // declare static arrays in shared memory
+    // declare arrays in shared memory
     __shared__ float A_s[TILE_DIM][TILE_DIM];
     __shared__ float B_s[TILE_DIM][TILE_DIM];
 
-    float sum = 0.0f;
+    unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
+    unsigned int col_start = blockDim.x * blockIdx.x * COARSE_FACTOR + threadIdx.x;
+
+    float sum[COARSE_FACTOR];
+    for (unsigned int c = 0; c < COARSE_FACTOR; c++)
+    {
+        sum[c] = 0.0f;
+    }
 
     // loop over each tile
-    for(unsigned int tile = 0; tile < N/TILE_DIM; tile++)
+    for (unsigned int tile = 0; tile < N / TILE_DIM; tile++)
     {
-        // load tile to the shared memory
+        // load tile to shared memory
         A_s[threadIdx.y][threadIdx.x] = A[row * N + tile * TILE_DIM + threadIdx.x];
-        B_s[threadIdx.y][threadIdx.x] = B[(tile * TILE_DIM + threadIdx.y) * N + col];
-        __syncthreads();                    // Threads wait for each other to finish loading before computing
 
-        // calculate partial sums with tile
-        for(unsigned int i =0; i < TILE_DIM; i++)
+        for (unsigned int c = 0; c < COARSE_FACTOR; c++)
         {
-            sum += A_s[threadIdx.y][i] * B_s[i][threadIdx.x];
+            unsigned int col = col_start + c*TILE_DIM;
+            B_s[threadIdx.y][threadIdx.x] = B[(tile * TILE_DIM + threadIdx.y) * N + col];
+            __syncthreads(); // Threads wait for each other to finish loading before computing
+
+            // calculate partial sums with tile
+            for (unsigned int i = 0; i < TILE_DIM; i++)
+            {
+                sum[c] += A_s[threadIdx.y][i] * B_s[i][threadIdx.x];
+            }
+            __syncthreads(); // Threads wait for each other to finish computing before loading
         }
-        __syncthreads();                    // Threads wait for each other to finish computing before loading 
     }
-    C[row*N + col] = sum;
+
+    for (unsigned int c = 0; c < COARSE_FACTOR; c++)
+    {
+        unsigned int col = col_start + c*TILE_DIM;
+        C[row * N + col] = sum[c];
+    }
 }
 
 void matmul_tiled_gpu(float *A, float *B, float *C, unsigned int N)
@@ -114,8 +128,8 @@ void matmul_tiled_gpu(float *A, float *B, float *C, unsigned int N)
     cudaMemcpy(B_d, B, N * N * sizeof(float), cudaMemcpyHostToDevice);
 
     // Run Kernel
-    dim3 numThreadsPerBlock(TILE_DIM, TILE_DIM);
-    dim3 numBlocks((N + numThreadsPerBlock.x - 1) / numThreadsPerBlock.x, (N + numThreadsPerBlock.y - 1) / numThreadsPerBlock.y);
+    dim3 numThreadsPerBlock(32, 32);
+    dim3 numBlocks((N + numThreadsPerBlock.x - 1) / numThreadsPerBlock.x/COARSE_FACTOR, (N + numThreadsPerBlock.y - 1) / numThreadsPerBlock.y);
 
     //////////////////////////////////////
     cudaEventRecord(start);
@@ -146,9 +160,9 @@ int main(int argc, char **argv)
 
     // Declare the host arrays
     unsigned int N = (argc > 1) ? atoi(argv[1]) : (1024);
-    float *A = (float*)malloc(N * N * sizeof(float));
-    float *B = (float*)malloc(N * N * sizeof(float));
-    float *C = (float*)malloc(N * N * sizeof(float));
+    float *A = (float *)malloc(N * N * sizeof(float));
+    float *B = (float *)malloc(N * N * sizeof(float));
+    float *C = (float *)malloc(N * N * sizeof(float));
 
     // Generate Random Numbers
     std::random_device entropy_source;
@@ -156,7 +170,7 @@ int main(int argc, char **argv)
     std::uniform_real_distribution<float> dist(-10.0, 10.0);
 
     // Initialize the arrays
-    for (int i = 0; i < N*N; i++)
+    for (int i = 0; i < N * N; i++)
     {
         A[i] = dist(generator);
         B[i] = dist(generator);
