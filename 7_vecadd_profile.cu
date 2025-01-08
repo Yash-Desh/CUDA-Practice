@@ -19,7 +19,7 @@ using std::chrono::high_resolution_clock;
 // 3. copy profiler content to a file   : nvprof -o <output_file_name> ./<binary_name> 
 // 4. More info from profiler           : nvprof -m all -o <output_file_name> ./<binary_name> 
 // 5. Run Nvidia Visual Profiler        : nvvp &  (does not work)
-// NOTE : nvprof & nvvp have been replaced by Nsight now 
+// NOTE : nvprof & nvvp have been replaced by Nsight Compute now 
 // #############################################################
 
 // print all the elements of given array
