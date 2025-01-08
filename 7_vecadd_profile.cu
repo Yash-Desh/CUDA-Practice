@@ -5,9 +5,9 @@
 #include <iostream>
 #include <cuda.h>
 #include <cuda_profiler_api.h>
-#include <random>       // generate random numbers
-#include <chrono>       // std::chrono namespace provides timer functions in C++, for CPU timing
-#include <ratio>        // std::ratio provides easy conversions between metric units, for CPU timing
+#include <random>       
+#include <chrono>       
+#include <ratio>        
 
 using std::chrono::duration;
 using std::chrono::high_resolution_clock;
