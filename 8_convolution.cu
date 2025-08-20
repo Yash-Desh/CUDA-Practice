@@ -137,6 +137,7 @@ void convolution_gpu(float mask[][MASK_DIM], float *input, float *output, unsign
 
 int main(int argc, char **argv)
 {
+    std::cout<<"Performing Convolution Operation\n";
     cudaDeviceSynchronize();
 
     // ######################### Allocate memory & initialize data #########################
