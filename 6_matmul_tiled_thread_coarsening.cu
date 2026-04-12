@@ -15,7 +15,10 @@ using std::chrono::high_resolution_clock;
 // Block dimension : 32x32
 #define TILE_DIM 32
 
-// declare an arbitrary coarsening factor
+// Declare an arbitrary coarsening factor. 
+// How many units of parallelism (output elements) is every thread going to be responsible for. 
+// Every thread is responsible for 4 output elements, so each thread block is responsible for 
+// 4 horizontally adjacent tiles. 
 #define COARSE_FACTOR 4
 
 // prints all the elements of given array
@@ -76,8 +79,7 @@ __global__ void matmul_tiled_kernel(float *A, float *B, float *C, unsigned int N
     unsigned int col_start = blockDim.x * blockIdx.x * COARSE_FACTOR + threadIdx.x;
 
     float sum[COARSE_FACTOR];
-    for (unsigned int c = 0; c < COARSE_FACTOR; c++)
-    {
+    for (unsigned int c = 0; c < COARSE_FACTOR; c++) {
         sum[c] = 0.0f;
     }
 

@@ -69,10 +69,11 @@ __global__ void stencil_tiled_kernel(float *in, float *out, unsigned int N)
     }
     __syncthreads();
 
-    // Boundary Condition : Last elements will not be calculated
+    // Boundary Condition : Boundary elements will not be calculated
     if (i >= 1 && i < (N - 1) && j >= 1 && j < (N - 1) && k >= 1 && k < (N - 1))
     {
-        // Boundary Condition : stencil operation carried out only for internal elements
+        // Boundary Condition : Only internal threads of a 
+        // thread block are active during the computation
         if ((threadIdx.x >= 1 && threadIdx.x < blockDim.x - 1) && (threadIdx.y >= 1 && threadIdx.y < blockDim.y - 1) && (threadIdx.z >= 1 && threadIdx.z < blockDim.z - 1))
         {
             // hard-code the elements to be added
