@@ -1,0 +1,60 @@
+# AGENTS.md
+
+Personal repository of standalone CUDA (and some OpenMP) practice programs. Each `.cu`
+file is a self-contained example, numbered by topic.
+
+## Layout
+
+- `*.cu` — standalone CUDA programs, mostly numbered by topic (vector add, matmul,
+  convolution, stencil, reduction, scan, histogram, etc.).
+- `template.cu` — starting point / boilerplate for new examples.
+- `ECE759_In-Class_Examples/` — course in-class examples.
+- `reading_material/` — reference PDFs and course material (not code).
+- `.vscode/` — editor config.
+- `*.prof` — profiler output artifacts.
+
+## Build & run
+
+Compile and run a single file directly with `nvcc`:
+
+```bash
+nvcc 1_vecadd.cu -o vecadd && ./vecadd
+```
+
+## Explaining GPU concepts
+
+- When explaining any GPU concept, verify the statement against the resources in
+  `reading_material/` and cite which resource (and section/page, if applicable) supports it.
+- If a claim cannot be verified against the present resources and you use the internet,
+  explicitly say so and list the specific sources/links you accessed (e.g. NVIDIA CUDA
+  docs/blogs, or any other resource).
+- When stating any fact drawn from material in `reading_material/AMD_specific/`, always
+  cross-verify against the NVIDIA equivalent resources and concepts, always state your
+  references, and be explicit about which facts are AMD-only.
+- If a conceptual question closely matches material in `reading_material/`, point me to the
+  specific file and the exact page number(s) or section(s) I can read. Only do this after
+  actually verifying the reference exists and covers the topic — do not guess. If you cannot
+  confirm the exact location, say so rather than risk a false positive.
+
+## Interview-prep documentation
+
+When I use a keyword like **"maintain documentation"**, create a new `.md` file in
+`interview_prep/` (named after the conversation's topic, e.g. `memory_coalescing.md`) that
+summarizes all the important points from the entire conversation. The document should:
+
+- Be a friendly, reader-friendly summary I can read just before an interview to understand
+  the whole topic of the conversation.
+- Include the key points and examples, using **only facts verified against sources** (the
+  `reading_material/` resources or explicitly cited external links).
+- Include the most common interview questions on that topic that interviewers typically ask
+  and that I should prepare for.
+- Keep all references out of the explanation to preserve reader flow — collect them in a
+  single **References** section at the very end of the document.
+
+When I say something like **"update documentation"**, do not start from scratch. Instead:
+
+- Find the relevant existing doc in `interview_prep/` for the topic.
+- Add all new points covered in the conversation since the doc was last updated.
+- Proofread the whole document and fix or remove anything that is now incorrect or redundant.
+- Keep everything verified against sources, with references kept in the References section
+  at the end rather than inline.
