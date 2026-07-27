@@ -1,0 +1,447 @@
+Title: Lecture 20 - Intra Warp Synchronization
+Video ID: YOEtjVJc7o0
+Detected language: en
+------------------------------------------------------------
+
+[00:00:02 -> 00:00:13] Hello everyone and welcome to lecture 20 of GPU computing. Today, we're going to talk about an advanced programming technique, and that's inter-award synchronization.
+[00:00:13 -> 00:00:23] So, as a recap of what we've done so far in the course, we started off the course in the first 3 weeks, where we looked at some of the fundamentals of GPU computing. We looked at the architecture of GPUs.
+[00:00:23 -> 00:00:31] We looked at the basics of the CUDA programming model. And we also looked at the various key optimizations that people apply
+[00:00:32 -> 00:00:48] for different applications. And then we took what we learned and we spent around 7 weeks going through various parallel patterns to see how we parallelize different applications with different patterns.
+[00:00:48 -> 00:00:53] And we used a lot of the techniques and the optimizations that we learned in the first part of the course.
+[00:00:53 -> 00:01:10] So, I hope by now that you've gotten a good idea of how we go about taking a particular application and then starting from scratch, doing a basic parallel implementation, and then incrementally optimizing it until you get an optimized version.
+[00:01:10 -> 00:01:22] And in fact, this is what you guys have been doing in the project and we're in the next part of the course. We won't be looking at new patterns, but we'll be looking at some advanced features.
+[00:01:23 -> 00:01:27] And maybe some of these will help you with some of the advanced optimizations we'll do in the project.
+[00:01:27 -> 00:01:38] So, we're done talking about parallel patterns. And today we're going to begin talking about some advanced features that GPU programmers might use to optimize their applications.
+[00:01:38 -> 00:01:50] And today, in particular, we're going to talk about intra-warp synchronization. And here intra-warp means within a warp. So, we're talking about synchronization within threads in the same warp.
+[00:01:51 -> 00:02:02] So, if you remember when we spoke about warps, we said that warps are the unit of scheduling in an SM and that the size of the warp is device specific, but it has always been 32 threads.
+[00:02:02 -> 00:02:11] And the unique things about threads within a warp is that they execute following the SIMD model, which means that we fetch one instruction and we execute it for all threads in that warp.
+[00:02:11 -> 00:02:17] And these threads execute on the SM, on the cores of the SM at around the same time.
+[00:02:17 -> 00:02:37] Now, because warps execute following the SIMD model, because the threads in the warp are executing at the same time on the SM, we can take advantage of that by synchronizing between them more efficiently than, for example, we synchronize across threads in an entire block using sync threads.
+[00:02:37 -> 00:02:49] And this brings us to the topic of intra-warp synchronization. So, we can take advantage of the special relationship between threads in the same warp to synchronize between them quickly.
+[00:02:50 -> 00:03:03] And CUDA actually has several built-in functions to synchronize between warps. And there's two kind of major categories of functions. We have functions that share data across threads.
+[00:03:03 -> 00:03:10] So, we call these shuffle instructions or shuffle intrinsics. So, basically what we're doing here is we're shuffling data across threads.
+[00:03:10 -> 00:03:21] So, it would be by sharing data across threads, obviously threads can already share data through shared memory, but here what we need is actually sharing registers or register values across threads.
+[00:03:21 -> 00:03:33] So, a thread can take a value in one of its registers and send it to another thread directly without going through shared memory, as long as that other thread is in the same warp.
+[00:03:34 -> 00:03:48] We can also do things like voting across threads. So, maybe different threads have, you know, some threads have, you know, have different threads, maybe check some conditions,
+[00:03:49 -> 00:04:00] or have true, evaluate true for that condition, others evaluate to false. So, if you want to figure out how many threads evaluated to true and how many valid to false, or even which threads were true and which threads were false,
+[00:04:01 -> 00:04:14] or something else like checking which threads are active inside of a certain divergent part of the code, all of these kinds of intrinsics fall under voting across threads.
+[00:04:14 -> 00:04:20] So, these are the two major types of intro warp synchronization, sharing data or voting.
+[00:04:22 -> 00:04:29] So, what are the different, let's start by talking about the shuffle instructions. What I will do in this lecture is I'm going to do two examples.
+[00:04:29 -> 00:04:40] I'm going to do one example where I'm going to show you how we can use shuffling on a pattern that we've seen before, and then I'm going to also do another example where I'll show you how to use voting.
+[00:04:41 -> 00:04:51] So, let's start with warp shuffle instructions. The built-in warp shuffle instructions enable threads to share data with other threads in the same warp.
+[00:04:51 -> 00:04:57] Now, previously, when we wanted to share data across threads in the same block, what we had to do is we had to declare something in shared memory.
+[00:04:58 -> 00:05:05] And then one thread would write the shared memory, and then we sync threads, and then the other threads will reach from shared memory, and that takes a long time.
+[00:05:05 -> 00:05:11] So, if we want to, if you want to share data just between threads in the same warp, we can avoid that.
+[00:05:12 -> 00:05:19] So, we will be using the warp shuffle instructions, and that's going to be faster than using shared memory and sync threads.
+[00:05:19 -> 00:05:23] Now, there are different variants of the warp shuffle instruction.
+[00:05:25 -> 00:05:33] There's shuffle sync, and what shuffle sync does is that it copies data from a specific
+[00:05:34 -> 00:05:49] lane, or, and I'm going to use lane here to refer to one of the threads in the warp. So, if the warp has 32 threads that execute in SIMD, we can refer to each of these threads in the warp as the lane, as a lane in the warp.
+[00:05:49 -> 00:05:53] You can think of it as a lane in our SIMD or vector unit.
+[00:05:54 -> 00:06:04] Okay, so we can copy directly from a lane, from one lane to another lane, in other words, from one thread in the warp to another thread in the warp.
+[00:06:06 -> 00:06:17] There's shuffle up, and notice how there's underscore sync here, and the reason there's underscore sync is because when we use shuffle instructions, we're kind of synchronizing across threads in the same warp.
+[00:06:17 -> 00:06:39] And this distinction is actually important in the late generations of the architecture, of the GPU architecture, where they started enabling different threads to take different paths simultaneously, so they have different threads, might have different program counters, and that's something that we didn't really cover, but this is part of the reason why we have underscore sync.
+[00:06:40 -> 00:06:57] So, another one is shuffle up, and with shuffle up sync, you shuffle from a lane with a lower ID relative to the thread you're shuffling to. There's also shuffle down sync, and that's where you copy from the lane with a higher ID relative to the caller.
+[00:06:57 -> 00:07:09] And then finally, there's another example where you have shuffle XOR sync, where you copy from a lane using some bitwise XOR of your own lane.
+[00:07:09 -> 00:07:32] Now, having told you about shuffle, this idea of a thread wanting to get a value that was produced by another thread, where have we seen this before? Which pattern did we look at where we had different threads producing values that later on another thread would read?
+[00:07:32 -> 00:07:49] Histogram, maybe now with histogram, you were all the threads were automatically incrementing the same value. It's not what I'm looking for. I was looking for one of the patterns where one thread, you have different threads for use of values, and later some of them read it. What did you say?
+[00:07:49 -> 00:08:01] Is it scan? A scan, right? Scan, exactly. So scan and reduction. So reduction is a simpler version of scan. So you're absolutely right. Reduction or scan.
+[00:08:01 -> 00:08:14] I'm going to focus on reduction because it's simpler. In reduction, while we have the way reduction worked, is that we had these threads all execute or produce, read some values and then produce a set of values.
+[00:08:15 -> 00:08:28] Okay. And then on the next step, some of the threads would read the values that different threads on the previous iteration produced. So here, thread five over here produced this value.
+[00:08:28 -> 00:08:35] The next iteration, then we had to do a sync threads and then the next iteration thread zero was reading the value of the thread five.
+[00:08:36 -> 00:08:49] Okay. And because we wanted all these threads to produce a value, and then we want to wait for them to finish before the threads can read these values, we had to do a sync threads in between each of the iterations of the scan.
+[00:08:51 -> 00:08:58] Now, when we looked at what that was, what that looked like at the warp level, at the warp level, we have a thread block has four warps.
+[00:08:58 -> 00:09:10] On the first iteration, half the warps drop out, and we were left with two warps. On the next iteration, half the warps keep dropping out again until we're down to one warp.
+[00:09:10 -> 00:09:19] Okay. So between each of these steps, we synchronize because we have threads in one warp that need to read data that was produced by threads in a different warp on the previous iteration.
+[00:09:20 -> 00:09:33] Well, when we're down to one warp, now when we're down to one warp for the remaining steps, the threads are going to be reading data that was produced by threads in the same warp on the previous iteration.
+[00:09:33 -> 00:09:46] So here, in this warp, I have threads zero, one, two, and three, right? On the next iteration, thread zero is going to read the value that was produced by thread two, thread one is going to read the value that was produced by thread three.
+[00:09:47 -> 00:10:02] Okay, so when one warp remains, okay, the threads are reading values from the same warp. So what we can do is we can actually use shuffle instructions to do this instead of using shared memory and sync threads.
+[00:10:03 -> 00:10:11] Okay, and the previous implementation production, what we did is on every iteration, we would store to shared memory and we would do a global sync threads.
+[00:10:12 -> 00:10:25] Okay, but what we can do when we get down to the same warp is rather than using shared memory and sync threads, what we can do is we can simply shuffle the data from one thread to another thread. So here, each of these threads.
+[00:10:26 -> 00:10:42] We'll add two elements and produce four values. And on the next iteration, this thread, thread zero can shuffle the value from the register of thread two to the register of thread zero without having to do any sync threads and without having to go through shared memory.
+[00:10:42 -> 00:10:49] Okay, is this clear? Any questions about this? I'll show you how we implement it, but conceptually, is it clear to everyone?
+[00:10:50 -> 00:10:56] Doctor, why is it different? Because things in sync threads.
+[00:10:56 -> 00:11:01] The other threads are, they're not doing anything, Aslam.
+[00:11:01 -> 00:11:06] Why is it, why is it faster? Because shared memory is slower.
+[00:11:06 -> 00:11:14] There's two aspects, there's two things. So obviously, when we go, when we reach from registers faster than reading from shared memory.
+[00:11:15 -> 00:11:25] But the key thing is that when I sync threads, what that means is I need to wait for all the warps to reach that sync threads before I can proceed.
+[00:11:27 -> 00:11:31] Okay, all the warps need to execute that sync threads before you can proceed.
+[00:11:31 -> 00:11:41] Whereas when we shuffle, we're only synchronizing across threads within the same warp. So we don't really care about what the other warps are doing. We don't have to, we don't have to make sure all the other warps reach the same threads.
+[00:11:42 -> 00:11:48] Hey, we're just thinking within the warp. That's why it's faster because because, you know.
+[00:11:48 -> 00:11:57] It's trivial to sync across threads within the warp because they're all executing at the same time. So they all just reach the barrier at the same time quickly.
+[00:11:57 -> 00:12:01] Or they all synchronize quickly because they're scheduled together.
+[00:12:01 -> 00:12:09] Whereas when I do a sync threads, these other warps are not scheduled and they need to get scheduled to execute the sync threads and all that stuff.
+[00:12:11 -> 00:12:12] Okay, thank you.
+[00:12:14 -> 00:12:21] So the fact that the threads in the same warp are executing in lockstep makes synchronizing between them faster because they're they're executing at the exact same time.
+[00:12:23 -> 00:12:26] Okay, so let's go see how to implement this.
+[00:12:27 -> 00:12:34] The code over here, and this is the code that we wrote previously for the reduced kernel.
+[00:12:34 -> 00:12:48] Each thread took a segment that's twice as large as the number of threads that it had and each thread was performing a reduction. So we started by loading the two halves of the input segment, adding them and putting them in a shared memory.
+[00:12:48 -> 00:13:03] And then we continued by going from stride and blocked them over to until the stride is one, so greater than zero. And on each step of the way, what we did is the threads that were less than the stride would add.
+[00:13:04 -> 00:13:08] The value that was stride away to the right.
+[00:13:08 -> 00:13:26] At the end, thread zero was responsible for storing the total sum of the, the total sum of the of the thread lock and into the partial sums and we dealt with the partial sums later on in a different way, either using by calling a reduced kernel again, or by simply adding them on them.
+[00:13:26 -> 00:13:32] So what we want to do is we want to change this reduction tree code.
+[00:13:32 -> 00:13:43] So that instead of going all the way to stride one, using shared memory and sync threads, we want to go until the stride is greater than the warp size.
+[00:13:43 -> 00:13:55] Which should remain sync threads and once the stride is equal to the warp size, what we want to do is we want to read those values to a register and then continue in the registers and using shuffle instruction.
+[00:13:55 -> 00:13:59] This is what we would like to do. So here's how we're going to change the code. So here.
+[00:14:00 -> 00:14:03] We're going to do the reduction tree and shared memory, but we're going to stop.
+[00:14:04 -> 00:14:14] Once the stride reaches warp sites, we're going to go until actually, let me first, let me first define a macro here that tells me what the warp size is going to define.
+[00:14:16 -> 00:14:24] Warp size. Okay. So what I will do is rather than stopping at zero, I'm going to stop at.
+[00:14:25 -> 00:14:25] Warp size.
+[00:14:26 -> 00:14:41] Okay, and now at the end of this iteration, what we have is we're going to have, we're going to stop with the warp size of 64 and this input underscore S is going to contain 64 different values that I need to continue the reduction on.
+[00:14:42 -> 00:14:52] So, what will happen is, is each thread is going to load two elements from shared memory, add them, and then that becomes the threads partial sum.
+[00:14:53 -> 00:15:00] Okay, so now we're going to continue by doing the reduction tree.
+[00:15:00 -> 00:15:03] Using shuffle instructions.
+[00:15:03 -> 00:15:08] Okay, I'm going to initialize a value sum.
+[00:15:08 -> 00:15:15] And that value sum is going to be so here we're going down to a single, a single warp.
+[00:15:15 -> 00:15:20] Each one of these threads is going to move the value from the previous thread.
+[00:15:20 -> 00:15:29] And the same warp and the value from the previous thread from shared memory. So each thread will have two values from shared memory and that will become the partial sum that this thread will produce.
+[00:15:30 -> 00:15:38] So here I'm going to start, I'm going to write, I will only want the threads in the first warp to compute. I'm going to write if.
+[00:15:40 -> 00:15:47] Thread index dot X is equal to zero and then these threads.
+[00:15:47 -> 00:15:56] Sorry, sorry, I apologize. I did that out of habit. If index dot X is less than the warp size.
+[00:15:56 -> 00:16:02] Okay, so here I have excluded all the threads that are greater than warp size, meaning I kept only the threads that are within the same warp.
+[00:16:02 -> 00:16:16] The first 32 threads. Okay, now if the thread index dot X is less than warp size, what I want the thread to do is I want it to load the value from the previous thread as well as the previous thread that's 32 away.
+[00:16:16 -> 00:16:23] And I wanted to put that in side of some variable. What I will write is I will write.
+[00:16:24 -> 00:16:31] Thumb is equal to input underscore S of thread index dot X.
+[00:16:32 -> 00:16:41] Plus input underscore S of thread index dot X plus warp.
+[00:16:42 -> 00:16:47] Okay, so this here is basically the iteration.
+[00:16:47 -> 00:16:56] For when stride is 32, so here we went from stride blocked him over to until the stride was greater than 32.
+[00:16:56 -> 00:17:06] And then now here I did the iteration where stride is 32 and while doing this iteration, I loaded my two values shared memory and then put them in a register.
+[00:17:06 -> 00:17:18] Okay, and then for the remaining strides, until we get to the last stride, which is stride one, what we will do is we will read from the register and write to the register.
+[00:17:18 -> 00:17:30] So here we read from shared memory and wrote to shared memory. Here we read from shared memory and wrote to the register. And then for the remaining iterations, we're going to read from registers and write to registers using shuffle instructions. And we don't have to sync.
+[00:17:30 -> 00:17:36] All right, so we're going to do the remaining iterations now. We're going to do four.
+[00:17:37 -> 00:17:42] And stride is equal to what? It's going to be equal to warp.
+[00:17:42 -> 00:17:48] Sized over two, right? Because we didn't block them over to until.
+[00:17:48 -> 00:17:53] Two times warp size here and then warp size here and now we're going to continue from warp size over two.
+[00:17:53 -> 00:17:59] Okay, and then stride is greater than zero.
+[00:17:59 -> 00:18:10] Okay, and then stride is divided by two.
+[00:18:10 -> 00:18:22] And then for each one of these iterations, what we did before is we did input a thread next to that x plus equals, so we added the value that was stride away.
+[00:18:22 -> 00:18:31] We're going to do the same thing here. We're going to add the value that's stride away, but rather than getting that value from shared memory, we're going to shuffle it from the other thread. And this is how we do that. We're going to write some.
+[00:18:31 -> 00:18:34] Plus equals.
+[00:18:34 -> 00:18:38] And then we have multiple shuffle instructions. We have shuffle.
+[00:18:38 -> 00:18:55] We have just shuffle where we get from the specific index lane or we have shuffle down or we have shuffle up. In this case, we want to shuffle down because we're shuffling from a thread that has a higher index. I'm going to write some.
+[00:18:55 -> 00:18:58] Plus equals and then we will write shuffle.
+[00:18:59 -> 00:19:01] Down think.
+[00:19:01 -> 00:19:12] Okay, and then we leave for my mask. I'll tell you what that is later. And then we're going to provide the value that we want to shuffle. And in this case, it's some.
+[00:19:12 -> 00:19:16] Okay, so each thread wants to shuffle its thumb.
+[00:19:16 -> 00:19:20] And what's going to we're going to provide the.
+[00:19:20 -> 00:19:32] Try that we want to shuffle by it, which is going to be right. Okay. So here what happens is, when I write shuffle down, think.
+[00:19:32 -> 00:19:38] Some drive each thread will take it will take the will shuffle the value.
+[00:19:38 -> 00:19:42] Off the thread that is tried away from it.
+[00:19:42 -> 00:19:53] Okay, each will shuffle the some value of the thread that is tried away from it. And this value will be returned by the shuffled out seek instruction. And then now the thread will take.
+[00:19:53 -> 00:20:00] The some value of the thread that's right away from it, and it'll use it in this case, and then accumulate it to his own.
+[00:20:00 -> 00:20:08] Okay, now there's one thing left, which is this over here. This first field here specifies.
+[00:20:08 -> 00:20:20] And this mask is going to specify what threads are going to be active during the shuffle because it's possible for me to only have some of the threads do the shuffle and the others not do it.
+[00:20:20 -> 00:20:27] In my case, I'm just going to have all the threads do it. Okay. I'm not going to worry about about about keeping track.
+[00:20:28 -> 00:20:34] So, I'm going to have all the friends shuffle down. So, I'm going to just provide a mask. That's all ones.
+[00:20:34 -> 00:20:38] And that's going to be F.
+[00:20:38 -> 00:20:44] Professor, you're cracking up a little bit. I'm not sure if it's from my side or yours.
+[00:20:44 -> 00:20:54] That's fine for me and everyone else. Here's new. Fine.
+[00:20:54 -> 00:21:04] Okay, so, so we said that the.
+[00:21:05 -> 00:21:22] Here, when we say, as we say that we're saying that all threads in the world are going to be active. Now, some threads for some trends that if we go stride away from the thread, that value is going to be out of bounds. So, in this case, the threads there are just not going to be not going to do anything.
+[00:21:22 -> 00:21:35] Okay, so here we're going to say that all threads are active, but then the threads where the threads that are trying to shuffle from a thread that's out of bounds are just not going to not not not going to do it.
+[00:21:35 -> 00:21:48] Okay, so, by the end, what's going to happen is I'm going to keep doing this until I reach the last thread. And now the last thread will have the result.
+[00:21:48 -> 00:22:07] Inside of it's some variables. So now I go down here for the next, the next, the next will equal 0. So, we'll have this value in some. So here, rather than storing this value from shared memory or reading it from shared memory and storing it, we're going to just store the value that's written in.
+[00:22:07 -> 00:22:11] So, okay, is this clear to everyone any questions?
+[00:22:13 -> 00:22:23] Doctor here, where are the when text to text less than website? So, when we're in one war, where are the threads dropping out? Shouldn't the mask change?
+[00:22:23 -> 00:22:43] So, what's going to happen is, well, first of all, some of the threads are just going to be loading data from out of bounds. So those are not going to be getting any useful data, but also, even if the threads don't get, even if the threads shuffle and garbage data at the end, we're only going to.
+[00:22:43 -> 00:22:57] We're only going to use, we're all going to use the sum for thread 0. So, even if the other threads in the war execute the shuffle instruction, we're not using their result.
+[00:22:57 -> 00:23:02] Okay, so we don't really need a boundary check over here.
+[00:23:02 -> 00:23:16] Professor, before we, we align the threads in such a way to reduce divergence, a control divergence. But now that we have this shuffle, shouldn't we revert back.
+[00:23:16 -> 00:23:24] Where we can use shuffle on every work at the beginning and keep it keep the tree as it was before.
+[00:23:24 -> 00:23:36] So, I see, I see what you're saying. So, what you're saying is we can do a, we can have each war do its own local reduction using the shuffle instruction.
+[00:23:36 -> 00:23:46] And then each work produces a partial sum and then, and then we have one one more reduce that partial some music, a shuffle instruction. Is that what you're saying?
+[00:23:46 -> 00:23:52] Yes, because now there's no more divergence since every thread is doing the shuffle with garbage data, but it's still doing it.
+[00:23:54 -> 00:23:59] Yeah, so you could, you could do that. That's, that's perfectly fine.
+[00:24:00 -> 00:24:10] If you, if you think about that each each warp is going to is going to have its own local divergence happening.
+[00:24:10 -> 00:24:13] Right, so here we drop out half the works every iteration.
+[00:24:13 -> 00:24:25] When we do it this way, we're dropping out half the works every iteration. Whereas if you want to do a local shuffle each work, and then do a shuffle of the partial sums of each work, all the works are going to be active on each iteration.
+[00:24:25 -> 00:24:38] Okay, so we haven't really gotten rid of divergence here in the sense that, in the sense that some threads are going to be are going to be doing some work, but that work is not going to be.
+[00:24:38 -> 00:24:43] Right, I see. Yeah.
+[00:24:43 -> 00:24:50] Okay, no, I'd rather have how the threads work and have the threads drop out and to have all of the work using shuffle instructions and not sync at all.
+[00:24:50 -> 00:25:01] Maybe if you want to implement that other version and try it and see if, you know, how well it performs, that would be interesting. That'd be interesting exercise.
+[00:25:01 -> 00:25:09] Professor, can you just repeat what the shuffle down sync does?
+[00:25:09 -> 00:25:13] So, what shuffle down sync does is that it takes.
+[00:25:13 -> 00:25:24] So, what shuffle down sync does is that it takes a value from a thread that is stride away and shuffles it down to use some thread.
+[00:25:24 -> 00:25:39] Okay, so here every what shuffle down sync will return is the sum register of the thread that is stride away from.
+[00:25:39 -> 00:25:45] Within the work, what's the, what's the zero X.
+[00:25:45 -> 00:25:54] So, again, this is the flag. It's a mask. It specifies what threads in the work are going to be active during this shuffle operation.
+[00:25:54 -> 00:26:04] Okay, in this case, I'm just making them all active because I'm not going to use the results of the thread. The result of the threads that I don't need.
+[00:26:04 -> 00:26:07] Okay, okay.
+[00:26:07 -> 00:26:13] Yeah, you'll see another use of this mask later on.
+[00:26:13 -> 00:26:23] When you look at voting, okay, so let's let's compile this and run it and see how it performs. And I just realized that I actually forgot to.
+[00:26:23 -> 00:26:30] Compile it and run it before I implemented this. You know, let me do that.
+[00:26:30 -> 00:26:34] Okay, I'm going to save.
+[00:26:34 -> 00:26:40] I'm going to compile this is the old code just to just to show you the performance of the old code.
+[00:26:41 -> 00:26:50] Okay, so it took around 2.1 milliseconds of the old code. Now, let me go back and open this.
+[00:26:50 -> 00:26:55] I'm going to redo. Okay.
+[00:26:55 -> 00:27:00] And I'm going to close it this time. I'm going to compile.
+[00:27:00 -> 00:27:09] And I'm going to run it and as you can see, we have significant performance improvement compared to the version of that shuffle instruction.
+[00:27:16 -> 00:27:19] Somebody just notified me that my screen is frozen. Can you see can you see now?
+[00:27:23 -> 00:27:32] Okay, so this was the performance that we got when we ran the version without.
+[00:27:33 -> 00:27:41] Without without shuffles and this is the performance that we got when we were just the performance that we got in the version with shuffle.
+[00:27:42 -> 00:27:47] Okay, so, as you can see, the execution time with shuffle is much faster than the execution time without shuffle.
+[00:27:49 -> 00:28:09] Okay, is it clear any questions? This is the code again. Okay.
+[00:28:09 -> 00:28:29] So, that is one example and one popular example of where we can use shuffle instructions whenever we want to share values across different threads in the work, especially if we're trying to have these threads collaborate and to perform some kind of reduction. It could be a sum, it could be a min, it could be a max, etc.
+[00:28:29 -> 00:28:31] And here, this is the code that we just wrote.
+[00:28:32 -> 00:28:38] The next category of intro work synchronization instructions is the work vote instructions.
+[00:28:39 -> 00:28:48] And the built in work vote instructions functions enable threads to vote on which threads in the work satisfy some condition.
+[00:28:48 -> 00:28:55] And there's different variants of the work vote. One of them is all sync.
+[00:28:55 -> 00:29:01] Which takes a mask of the threads that participate in the, in the, in the shuffle instruction.
+[00:29:01 -> 00:29:09] A predicate and checks if the predicate is non zero for all of the participating.
+[00:29:09 -> 00:29:15] Okay, so checks if all threads in the work satisfy some condition.
+[00:29:15 -> 00:29:24] Or their values satisfy some condition. There's anything and anything is, it also takes a mask to participate in the predicate.
+[00:29:24 -> 00:29:34] And checks if one of at least one of the threads in the thread satisfies the condition, or it checks if the predicate is non zero for some thread in the work.
+[00:29:34 -> 00:29:41] Okay, so here we check if all the threats satisfy some condition here and we check if any of the threads satisfy some condition.
+[00:29:41 -> 00:29:50] Another one is balancing and what balancing does is that it takes a mask again of the threads that are participating in a predicate.
+[00:29:50 -> 00:29:58] And it returns a mask that has a bit set for each thread that evaluates the predicate to non zero.
+[00:29:58 -> 00:30:16] Okay, so it gives me a 32 bit integer and a 32 bit value is going to have one bit that corresponds to each thread in the work. And that bit will be set to one if the predicate is non zero. It will be set to zero if the predicate is zero.
+[00:30:16 -> 00:30:22] Okay, so this doesn't just tell me which threads satisfy the predicate. It also tells me.
+[00:30:22 -> 00:30:29] Sorry, this doesn't just tell me if the threads satisfy the predicate. It also tells me which threads satisfy the predicate.
+[00:30:29 -> 00:30:41] And then the other interesting one is active mask. An active mask basically tells me which threads are active in a particular point in the code.
+[00:30:41 -> 00:30:50] And this is useful when we are doing these workshop instructions in a place where we have control divergent.
+[00:30:50 -> 00:31:12] Because this allows us to know which threads are active in this branch of the code and which threads are not active. Somebody asked me that before. They told me how can we know which threads are active and which threads are not. And this is how you can do it using the active mask.
+[00:31:12 -> 00:31:25] Somebody is asking what can the predicate be? The predicate can't be anything. I mean, some condition that could be true or false. You basically just care if it's zero or non zero.
+[00:31:29 -> 00:31:46] Okay, now to show you an example of where something like this might be useful. Let me show you another simple code that enqueues stuff to a queue.
+[00:31:46 -> 00:31:58] So, let's go. I have another professor. Can voting in this case be useful for for debugging purposes, for example?
+[00:32:00 -> 00:32:16] I mean, usually, usually when you have something like this, it's not provided for debugging. It's provided because it's useful in the actual computation. If you have some situation where you want to use it for debugging, I mean, you can use it, of course, but that's not the primary objective of providing it.
+[00:32:17 -> 00:32:28] The primary objective of providing it is to be able to synchronize, have threads collaborate to do something together. Okay. And let's show an example of where it can be useful.
+[00:32:29 -> 00:32:41] So here, what you can do, I have an enqueue kernel. And what this enqueue kernel does is that it takes, it has some input. It reads a value from this input. It checks some condition on this value.
+[00:32:41 -> 00:32:52] And if the value satisfies some condition, it's going to add the value to a queue by atomically incrementing the queue size, getting an index into the queue, and then adding the value at that point in the queue.
+[00:32:53 -> 00:33:08] Okay, so we've seen queues before. Okay, we've seen queues before with BFS. I didn't want to have a full-fledged example here with queue just to keep things simple. So here we just have.
+[00:33:09 -> 00:33:17] So here we just have a queue and all the kernel does is check a condition and add something to the queue.
+[00:33:18 -> 00:33:28] Okay, this code could be inside of a kernel where there's much more context, where there's much more complex work happening before we add things to the queue.
+[00:33:28 -> 00:33:40] But I kind of, I just say using this as a simple example so that we can avoid having all the noise from other examples and then just focusing on the action of adding to a queue.
+[00:33:41 -> 00:33:53] Now, why is this interesting for shuffle instructions? Well, as you can see in this example, all the threads in the thread block are incrementing the same variable to add to the queue.
+[00:33:54 -> 00:34:16] Okay, and so they're atomically incrementing the same global variable to find where they need to add to the queue and then they add to the queue. Now, previously we optimized this using privatization where we declared a private queue and shared memory and then had all the threads add to the shared queue and then wrote that shared queue out to global memory.
+[00:34:17 -> 00:34:28] Another thing we could have done is we could have looked at each warp and rather than every thread in the warp doing an atomic add.
+[00:34:29 -> 00:34:35] We can have the threads of the warp collaborate with each other to figure out how many threads in the warp want to add to the queue.
+[00:34:36 -> 00:34:52] And then have only one thread in the warp do an atomic add and then have all the threads in the warp write out their result to the queue at the location that the leader thread or that one thread that did the atomic add reserved.
+[00:34:52 -> 00:35:21] Okay, let's see how we can do this. Is it clear to everyone what this optimization is? What we want to do is rather than having all threads in the warp, each of them increment the global counter, I'm going to have them collaborate with each other to find out what is the total number of values that this warp wants to add to the queue and then we do one atomic add for the entire warp and then we have all the threads in the warp collaborate to store their result.
+[00:35:22 -> 00:35:33] At the right point in the queue. Okay, is it clear? Okay, well, let's see how we can do this.
+[00:35:35 -> 00:35:52] First of all, this is the original queue code that I just showed you and we observed that the atomic add here, we have all the threads contending on the same variable to reserve space in the queue and what we want is to optimize this by doing one atomic add per warp.
+[00:35:53 -> 00:36:05] So, here's what we can do. We can optimize this with warp votes. So, we can have only one thread in the warp, increment the global counter on behalf of the others and then have all of them store to the queue.
+[00:36:05 -> 00:36:18] And here are the steps that we're going to follow to do this. The first thing we're going to do is we're going to assign a leader thread. So, we're going to assign one thread in the warp that's going to be a leader thread that's going to lead all the other threads in the warp.
+[00:36:18 -> 00:36:24] Then what we want to do is we want to find how many threads in the warp want to add to the queue.
+[00:36:26 -> 00:36:36] Once we know how many threads in the warp want to add to the queue, we're going to have the leader thread perform an atomic operation to reserve that much space in the queue.
+[00:36:37 -> 00:36:46] And then once the leader thread reserves that space in the queue, the leader thread is going to broadcast its result to all the other threads.
+[00:36:48 -> 00:37:02] And then once we broadcast the results to all the other threads, each of the thread is going to figure out its offset for its own result from the location that the leader thread reserved, and it's going to store that result.
+[00:37:03 -> 00:37:10] Okay, is this sequence of steps clear? I'm going to show you how we're going to implement each of these using the warp vote functions, but is this clear?
+[00:37:14 -> 00:37:22] Okay, so let's start with the first step, which is assigning a leader thread. So, what we'd like to do is we'd like to assign a leader thread.
+[00:37:23 -> 00:37:37] And the way that we can to assign a leader thread, we can't, can we just say that thread zero is the leader? Right? Can we say that thread zero is always the leader?
+[00:37:40 -> 00:37:42] Yes, we have to make sure that it doesn't drop out.
+[00:37:43 -> 00:37:54] Right, exactly. So here, I want to replace this atomic add code with code that has one thread do on behalf of all.
+[00:37:54 -> 00:38:08] So here, first thing I want to do is I want to assign a leader thread. So somebody said that we had to make sure that thread zero, we can just say thread zero, because thread zero may not pass the condition. So thread zero may not reach this point.
+[00:38:09 -> 00:38:21] Okay, but zero may not reach this point in the code. So what we want to do is we want to assign a leader thread. And the way we can assign the leader thread is we're going to identify which threads are active.
+[00:38:22 -> 00:38:26] And then we're going to pick the first active thread in the warp.
+[00:38:26 -> 00:38:34] Okay, we're going to identify which threads are active, and we can pick that first and determine the warp.
+[00:38:34 -> 00:38:44] So, how do I identify which threads are active? We saw a warp vote function that gives us that. What was it? Does anybody remember it?
+[00:38:44 -> 00:38:47] Any sync or ballot sync?
+[00:38:47 -> 00:38:51] No, it wasn't ballot sync, it was active mask.
+[00:38:51 -> 00:39:00] Okay, so we're going to find which threads are active using the active mask. So the active mask is going to contain a bit set for each thread that is active.
+[00:39:01 -> 00:39:08] Okay, so what I'm going to do that is as follows, I'm going to write unsigned and active mask.
+[00:39:09 -> 00:39:18] Okay, is equal to, or let me avoid confusion. I'm going to call this active threads is equal to underscore underscore.
+[00:39:18 -> 00:39:22] Active mask. Okay, I just don't want to name it the same name as the function itself.
+[00:39:23 -> 00:39:33] Okay, so by calling active mask, this returns a 32-bit integer that has a bit set for each of the active threads. Somebody has a question?
+[00:39:35 -> 00:39:45] As you said, it has one bit assigned per active for each active thread. So, should there be a byte instead of an int?
+[00:39:45 -> 00:39:50] No, because we have 32 threads in the warp, so we need a 32-bit value.
+[00:39:50 -> 00:40:10] Okay, now that I know the active threads in the warp, the next thing, so for example, if threads 1, 2, 4, and 5 are active, then the active mask is going to look like this.
+[00:40:10 -> 00:40:15] I'm going to have the zeros for the inactive threads, and I'm going to have ones for the active threads.
+[00:40:15 -> 00:40:23] So here it says 1, 2, 4, and 5 will have their bit set in the active mask.
+[00:40:26 -> 00:40:37] Here I'm using an 8-bit example, but in practice, you have 32 threads in the warp, so you're going to have a 32-bit mask.
+[00:40:37 -> 00:40:45] Okay, now what I want to do is I will, remember, I'm trying to assign a leader here. So what I want to do is I want to pick one of these threads to be the leader.
+[00:40:45 -> 00:41:05] Okay, how can I pick one thread to be the leader? Well, I can simply pick the first thread in the warp to be the leader, and to do that, there is actually an intrinsic function that tells us, that gives us the first bit that is set in a particular value.
+[00:41:05 -> 00:41:14] Okay, so I want to designate the first active thread as the leader, and to do that, what I want to do is I want to find the first 10-bit in the active mask.
+[00:41:14 -> 00:41:23] So in this case, I want thread 1 to be the leader, so I want to find, because the first set bit in the active mask is the one that corresponds to thread 1.
+[00:41:25 -> 00:41:33] Now, there is a built-in intrinsic function that does that, and it's called FFS, find-first set.
+[00:41:33 -> 00:41:43] And FFS, find-first set, this is not a warp-level intrinsic, okay? This is just an intrinsic function, but it's not a warp-level thing. Each thread executes its own FFS.
+[00:41:43 -> 00:41:56] The threads are not collaborating here. So, if FFS takes some 32-bit value and tells you what is the first bit that is set in that value, it's going to return the index of the first set bit in the mask.
+[00:41:56 -> 00:42:09] Now, one thing to note is that the index that it returns starts from 1, okay? So, if 0 is the thread 0, or if the value at position 0 is the first set bit, it's going to return 1.
+[00:42:09 -> 00:42:21] If the value at position 1 is the first set bit, it's going to return 2. If the value at position 2 is the first set bit, it's going to return 3. The reason is that the return, it could be possible that none of the bits are set.
+[00:42:21 -> 00:42:26] Okay, and in this case, we want it to return 0.
+[00:42:26 -> 00:42:35] Okay, so if none of the bits are set, it's going to return 0, and if bit 0 is set, it will return 1, if bit 1 is set, it will return 2, etc.
+[00:42:36 -> 00:42:41] Okay, so in this case, what will be my result when I call FFS on this active mask?
+[00:42:41 -> 00:42:52] 2, right, it's going to be 2, because the first set bit is 1, so it will give me 2. So, the index thinks that it's from 1.
+[00:42:52 -> 00:42:57] So, for me to identify what is my leader thread, I'm going to call FFS.
+[00:42:57 -> 00:43:04] So, I'm going to write unsigned and leader. So, this is going to be the index of the leader thread within the warp.
+[00:43:05 -> 00:43:13] Okay, and all right, leader is going to be underscore underscore FFS. So, find first set of the active threads mask.
+[00:43:13 -> 00:43:19] Okay, and then what do I need to do? This is indexed by 1.
+[00:43:19 -> 00:43:21] So, I'm going to have to subtract 1 from it.
+[00:43:21 -> 00:43:25] Okay, so that I get a value that's indexed by 0.
+[00:43:25 -> 00:43:33] So here, if thread 0 was the first, if thread 0 was the first active, sorry, if bit 0 was the first active bit,
+[00:43:33 -> 00:43:37] then the leader is going to be thread 0. So, FFS will return 1 and I subtract when I get 0.
+[00:43:37 -> 00:43:47] If thread 1, if bit 1 was the first active bit, then FFS of active threads will return 2 and then 2 minus 1 will be 1. So, the leader will be 1.
+[00:43:47 -> 00:43:58] Okay, so now what I've done is I have assigned a leader for the threads in my warp that are active inside of this condition.
+[00:43:58 -> 00:44:13] Now that I've assigned a leader, the next step is for me to find out what is the reason I'm assigning a leader is because I want the leader to allocate space in my queue on behalf of all the other threads.
+[00:44:13 -> 00:44:22] Okay, so what I will do next is I want to find out how many threads need to add to the queue.
+[00:44:22 -> 00:44:33] So, I'm going to, what I want to do, I want to allocate space for all the threads to store. So, I want to find out how many threads need to add to the queue.
+[00:44:33 -> 00:44:50] So, the way I will do that is by, how do I find out how many threads need to add to the queue? I have the number of threads that are active or I know which threads are active.
+[00:44:51 -> 00:44:53] How can I know how many threads are active?
+[00:44:54 -> 00:44:56] We need to count the number of 1s.
+[00:44:56 -> 00:45:01] Right, we need to count the number of bits that are set in my active threads.
+[00:45:01 -> 00:45:05] Okay, so we need to count the number of set bits in the active maps.
+[00:45:05 -> 00:45:15] And there's actually another intrinsic that takes a 32-bit value and counts the number of bits that are set to that value. Does anybody know it?
+[00:45:15 -> 00:45:23] Actually, it's a popular name. It's not just on GPUs.
+[00:45:23 -> 00:45:26] So, it's called population count. Are you guys familiar with population count?
+[00:45:26 -> 00:45:33] So, population count, POPC, is an intrinsic that takes a 32-bit value.
+[00:45:33 -> 00:45:38] And returns the number of bits that are set in that 32-bit value.
+[00:45:38 -> 00:45:48] Okay, in the previous example here, if I call POPC on this active map, it's going to give me 4, because there are 4 bits that are set.
+[00:45:48 -> 00:45:53] Okay, in general, POPC will give me however many bits are set in that value.
+[00:45:53 -> 00:46:03] And that's going to be the number of threads that are active, which is basically the number of elements that I would like to reserve in my.
+[00:46:04 -> 00:46:16] Okay, so next we're going to find how many threads are active and the way we do that is as follows.
+[00:46:16 -> 00:46:30] We're going to write unsigned and non-active is equal to population count of active threads.
+[00:46:35 -> 00:46:42] Okay, now that I know how many threads are active, I want the leader thread.
+[00:46:42 -> 00:46:47] You're going to have the leader thread perform the atomic operation.
+[00:46:47 -> 00:46:49] Okay, we're going to have the leader thread perform the atomic operation.
+[00:46:50 -> 00:46:56] So, how much does the leader thread need to allocate in the queue? Well, it needs to allocate non-active elements.
+[00:46:56 -> 00:47:05] Okay, so we're going to have the leader allocate in queue.
+[00:47:05 -> 00:47:17] Okay, so we're going to have unsigned in J. J is going to be the position where the leader is going to allocate in the queue. And we're going to check if the thread is the leader. So I'm going to write if.
+[00:47:18 -> 00:47:27] But index the next remember, I want the index of the thread within the work now within the block. So, how do I get the index of the thread within the work?
+[00:47:27 -> 00:47:37] Modulo work, work, so it's right. Exactly. If I don't find that, so that's modulo.
+[00:47:37 -> 00:47:41] Warp size and define work size up here.
+[00:47:41 -> 00:47:54] Okay, I'm going to turn it back to module or and if that is equal to the leader.
+[00:47:54 -> 00:47:58] Okay, so here only the leader thread.
+[00:47:58 -> 00:48:13] Is going to pass this check and then if the thread is the leader, what's the thread going to do? It's going to do atomic add.
+[00:48:13 -> 00:48:22] And it's going to add to the queue size here. The queue size tells me how many elements are in the queue so far. So I'm going to increment the queue size.
+[00:48:22 -> 00:48:27] By the number of active threads, which is the number of elements I want to add to my queue.
+[00:48:27 -> 00:48:32] And the return value is going to be the old value of queue size, which is the position that I want to.
+[00:48:32 -> 00:48:37] I think you all the works value, so I'm going to set this to J.
+[00:48:37 -> 00:48:46] Okay, now that I do this, what I want to do is I want to broadcast.
+[00:48:46 -> 00:48:55] The result to the other threads, so whichever whatever the leader is, I want to take that result and broadcast it to all the other threads.
+[00:48:55 -> 00:48:59] What can I do to do that?
+[00:48:59 -> 00:49:04] Warp 0 has a value, which is J, the leader warp.
+[00:49:04 -> 00:49:10] Sorry, the leader thread has a value, which is J, and it wants to send this value to all the other threads.
+[00:49:10 -> 00:49:17] So, what can you do that? What can you do to do that?
+[00:49:17 -> 00:49:21] Well, just shuffle.
+[00:49:21 -> 00:49:27] Maybe just a little. So, remember what we're going to do is we're going to write.
+[00:49:27 -> 00:49:40] A is equal to shuffle. So, here for at this point, only through only the leader thread has the right J. I want all the threats to have the right J. So, I'm going to write J is shuffle.
+[00:49:40 -> 00:49:53] Sting. Okay, and I need to provide it a mask with the threads that are going to be involved in the shuffle instruction. I need to write the value that I want to shuffle, which in this case is J and I need to provide it.
+[00:49:54 -> 00:50:00] Where the way shuffle works, the index of the lane I want to shuffle through, which in this case is the leader.
+[00:50:00 -> 00:50:07] Okay, so what this is saying is that shuffle the value of J.
+[00:50:07 -> 00:50:11] Chopper the leaders J to all the other threads.
+[00:50:11 -> 00:50:18] And now all the, now this will return the leaders J for all the threads and it will initialize their J to that.
+[00:50:18 -> 00:50:26] Now, I need to have here the mask that tells me which threads in the work are going to execute the shuffle to think instruction.
+[00:50:26 -> 00:50:32] So, which threads in the work execute the shuffle to think instruction? Can I do this?
+[00:50:32 -> 00:50:37] No, it's that we got from active mask.
+[00:50:37 -> 00:50:44] Right exactly, because not all the threads are active at this point. What I'm going to do is I'm going to provide the active threads.
+[00:50:44 -> 00:50:48] Which are part, which are in the active, which I got from the active.
+[00:50:48 -> 00:50:54] Okay, sorry question.
+[00:50:54 -> 00:51:00] Yeah, sorry, can the thread shuffle to itself? Will it work or do nothing?
+[00:51:00 -> 00:51:06] That's fine. I mean, here the shovel itself is just going to keep the same value and store it.
+[00:51:06 -> 00:51:10] So, the leader thread is just going to shuffle its value to itself.
+[00:51:10 -> 00:51:13] Okay, so it's not going to change.
+[00:51:13 -> 00:51:24] Okay, so now every thread knows.
+[00:51:24 -> 00:51:30] The starting point of where it needs to store in the queue.
+[00:51:30 -> 00:51:34] So, if there are 10 threads that are active in this work.
+[00:51:34 -> 00:51:39] The leader is going to allocate 10 elements in the queue.
+[00:51:39 -> 00:51:43] Okay, and then this J here is going to point to the beginning of those 10.
+[00:51:43 -> 00:51:51] What's left for me to do is each friend needs to figure out.
+[00:51:51 -> 00:51:54] Which of those 10 elements it needs to.
+[00:51:55 -> 00:52:04] Okay, which of those 10 elements it needs to store to. So what we still need to do is we need to.
+[00:52:04 -> 00:52:10] Find the position of each.
+[00:52:10 -> 00:52:14] Active thread in the queue.
+[00:52:14 -> 00:52:20] Let's take a look at how, by the way, here the broadcast that we use.
+[00:52:20 -> 00:52:26] Okay, next step is we want to find the offset of each active thread and store the result.
+[00:52:26 -> 00:52:30] Now, let's take a look at the previous example where we had this.
+[00:52:30 -> 00:52:38] Okay, we were, we would have allocated the leader thread would have been thread 1. Thread 1 would have allocated.
+[00:52:38 -> 00:52:42] 4 elements in the queue.
+[00:52:42 -> 00:52:51] And then starting from that 4 elements, thread 1 is going to store its result at an offset of 0. Thread 2 stores its value at an offset of 1.
+[00:52:51 -> 00:52:56] Thread 3 doesn't have anything, so thread 4 is going to store the value at an offset of 2, thread 5 at an offset of 3.
+[00:52:58 -> 00:53:03] Okay, so what each thread needs to find is.
+[00:53:04 -> 00:53:08] Where it needs to store its value in the queue, how can I do that?
+[00:53:12 -> 00:53:26] We need some sort of scan, right? It's going to be similar to scan, but we can do it more efficiently than scan, but you're correct to observe that there's something similar to scan and then what do we need to find?
+[00:53:30 -> 00:53:36] Can we do a bitwise end and select up to the thread that we're at.
+[00:53:37 -> 00:53:41] And then count them using the function we used before.
+[00:53:41 -> 00:53:48] You're absolutely right. Absolutely right. So basically what we need to do is we need to find the number of previous threads that are active.
+[00:53:49 -> 00:53:53] Okay, we're trying to find here as the number of previous threads that are active.
+[00:53:53 -> 00:53:58] So here the reason thread 1 is 0 is because there are 0 active threads before it.
+[00:53:59 -> 00:54:03] The reason thread 2 is 1 is because there's only 1 active thread before it.
+[00:54:03 -> 00:54:22] The reason thread 4 is 1 is because there are, so the reason thread 4 gets 2 is because there are 2 active threads before it. The reason thread 5 gets 3 is because there are 3 active threads before it. So what we want to do is we want to count the number of 1's in the previous threads.
+[00:54:23 -> 00:54:27] To do that, what we can do is we can do a bitwise end.
+[00:54:28 -> 00:54:35] To keep only the 1's of the previous threads and remove the 1's of the threads that come later.
+[00:54:35 -> 00:54:46] Okay, and then after we do the bitwise end, we do a population count. Okay, so here what we'll do is we'll, for example, if we want to find.
+[00:54:46 -> 00:54:50] For thread 4, what its offset is.
+[00:54:50 -> 00:54:53] We're going to do a bitwise end.
+[00:54:53 -> 00:55:04] With a mask that contains 1's for all the threads whose index is less than 4, and 0's for all the threads whose index is greater than or equal to 4.
+[00:55:04 -> 00:55:13] And when we do a bitwise end over here, we get the number of previous active threads. So this was the number of active threads. This mask represented the active threads.
+[00:55:13 -> 00:55:20] This mask represented the previous threads. And then when we do a bitwise end of them, we get a mask that represents the.
+[00:55:21 -> 00:55:28] Previous active threads, and then once we do a population count on this, we will get the offset that we are looking for.
+[00:55:28 -> 00:55:35] Okay, so we have an active mask. We know how to do a bitwise end and we know how to.
+[00:55:35 -> 00:55:42] Find the previous active, we know how to do a population count. How can I get a mask that tells me what are the previous active threads?
+[00:55:42 -> 00:55:55] It's the current index minus 1 in decimal. So you can get that index.
+[00:55:55 -> 00:56:02] So it's not the current index, but I know what you mean. You're saying it's a bit set for the current index.
+[00:56:02 -> 00:56:06] And then I subtract 1 to get a bunch of 1.
+[00:56:06 -> 00:56:12] So here, if I want to get the previous threads mask for when the thread index is 4.
+[00:56:12 -> 00:56:18] I'm going to start off with something where I have a value where I have 1.
+[00:56:18 -> 00:56:28] Set the position 4 and 0 otherwise, then I subtract 1, and that gives me 1 for all the other threads before the thread count.
+[00:56:28 -> 00:56:35] Okay, so basically what we're going to do is if the thread index is 4, we're going to shift a 1 by the thread index.
+[00:56:35 -> 00:56:42] That will give me 1 in position 4, and then we're going to subtract 1. That's going to give me a bunch of 1s in the previous position.
+[00:56:42 -> 00:56:48] Okay, so we're going to shift 1 by the thread index, and then we're going to subtract 1.
+[00:56:48 -> 00:56:52] All right, let's see how we can do that.
+[00:56:52 -> 00:56:56] Come back here. What I'd like to do now is I would like to do.
+[00:56:56 -> 00:57:00] First, I want to find the previous threads.
+[00:57:00 -> 00:57:05] We're going to do it by shifting 1 by the thread index and then subtracting 1. So I'm going to do.
+[00:57:05 -> 00:57:08] Previous.
+[00:57:09 -> 00:57:11] Right, so this is the math for the previous grants.
+[00:57:11 -> 00:57:18] And what I want to do is I want to shift, take a 1 and I want to shift it by the thread index. What is the thread index?
+[00:57:18 -> 00:57:30] How do I find the index of the thread within the warp? I've done it before, right?
+[00:57:32 -> 00:57:35] Take thread index.x and I'm going to modulo the warp size.
+[00:57:36 -> 00:57:45] Okay, so I shift a 1 by that amount. Let me put some parentheses here.
+[00:57:46 -> 00:57:49] Be certain clear what I'm doing.
+[00:57:49 -> 00:58:02] I get the, I get the index of the thread within the warp. I take a 1 and shift it by that amount. So this value is going to give me a 1 set in position 4 and 0 is elsewhere. And I'm going to subtract 1 from that.
+[00:58:02 -> 00:58:09] Okay, I'm going to subtract 1 from that. This will give me the previous.
+[00:58:10 -> 00:58:19] Okay, now that I have the previous threads, I want to find the previous active threads. So I'm going to do a bitwise add between the previous threads and the active.
+[00:58:19 -> 00:58:24] Maths, okay, we had a question.
+[00:58:25 -> 00:58:33] Yes, don't we have an arithmetic shift that way the 1 is replicated without having to do the minus 1. That's if you should write.
+[00:58:33 -> 00:58:42] Oh, okay, we can't. I have to talk about n versus unsigned n.
+[00:58:43 -> 00:58:49] No, I was talking about arithmetic shift where the 1 is replicated, but maybe, maybe it's only for shift. Right? I'm not sure.
+[00:58:49 -> 00:58:59] Oh, I see what you mean. So you want to, you want to shift, you want to take a 1 and you want to shift it minus 1 time.
+[00:59:00 -> 00:59:09] Where you shift and you just get a bunch of 1. That's where you shift. Yeah, I'm actually not sure if that's supported.
+[00:59:13 -> 00:59:16] Professor, there's one thing I don't understand.
+[00:59:16 -> 00:59:21] So, the threads, the thread index indices are.
+[00:59:21 -> 00:59:27] Set at the block level, we don't actually know within the warp.
+[00:59:27 -> 00:59:31] Which threads will execute, right?
+[00:59:32 -> 00:59:36] We know the index of the thread within the warp, which is this.
+[00:59:36 -> 00:59:40] We can get it by doing module warp size.
+[00:59:41 -> 00:59:48] But it might, so thread number 2 might execute along with thread number 234.
+[00:59:48 -> 00:59:53] No, because threads in the same warp execute in SIMD, right?
+[00:59:55 -> 01:00:02] Yes, threads 0 to 31 are in one warp, threads 32 to 63 are in the next warp, etc.
+[01:00:02 -> 01:00:06] Oh, okay. Okay. Okay. Because I thought you could mix them up within the same block.
+[01:00:06 -> 01:00:11] No, no, the threads are assigned to warps based on their index.
+[01:00:11 -> 01:00:16] Oh, okay. Okay. Yeah, so all the threads in the same warp have to be the consecutive threads.
+[01:00:17 -> 01:00:23] Okay, so now we're going to find the previous active threads by doing bitwise and between the active threads.
+[01:00:24 -> 01:00:26] And the previous threads.
+[01:00:27 -> 01:00:35] Okay, and then after that, what we want to do is once we find the previous active threads, we want to count the number of ones inside of it.
+[01:00:35 -> 01:00:36] How do we do that?
+[01:00:39 -> 01:00:40] Oopsie.
+[01:00:41 -> 01:00:46] Right exactly. We're going to use a population count in order for us to count the number of set bits in the previous active threads.
+[01:00:47 -> 01:00:58] So here the offset is going to be equal to the population count of the previous active threads.
+[01:01:00 -> 01:01:07] Okay, and then now what's left for me is to store the result in the queue.
+[01:01:07 -> 01:01:14] So, I will write Q of something is equal to my value.
+[01:01:15 -> 01:01:19] Okay. And here what is the index into the queue?
+[01:01:22 -> 01:01:28] It's going to be the starting position that the leader thread obtained, which is J.
+[01:01:29 -> 01:01:35] Plus the offset that each thread found for itself. So J plus offset.
+[01:01:36 -> 01:01:40] Okay, this is clear to everyone.
+[01:01:43 -> 01:01:51] Questions. All right, so let's compile this and run it.
+[01:01:51 -> 01:01:58] And I just realized that I did the same mistake again. I forgot to run the version without this optimization. So let me.
+[01:02:00 -> 01:02:07] Let me undo all the way. So I'm going to compile the old version of a queue.
+[01:02:08 -> 01:02:13] And I'm going to run it. So here you'll notice my kernel time is 0.39.
+[01:02:15 -> 01:02:17] And now let me redo.
+[01:02:20 -> 01:02:23] Okay, I'm going to compile now the new version.
+[01:02:24 -> 01:02:29] And I'm going to run it. And you'll notice we actually heard performance a little bit.
+[01:02:31 -> 01:02:36] Okay, the reason is that I tried to kind of have a focused example.
+[01:02:37 -> 01:02:42] And because I had the focused example, the overhead of doing the warp synchronization
+[01:02:42 -> 01:02:45] was actually not worth the atomic operations that I avoided.
+[01:02:46 -> 01:02:51] Okay, so in this particular example, it hurt performance,
+[01:02:51 -> 01:02:56] but in other examples where there's perhaps more going on and there's more context to the problem,
+[01:02:56 -> 01:03:02] this approach of collaborating across threads to do something together is actually an effect.
+[01:03:03 -> 01:03:07] Okay, so I apologize if you're disappointed that there's a little bit of performance
+[01:03:07 -> 01:03:14] degradation, but I at least hope that this exercise gave you kind of a hint at how we can use
+[01:03:15 -> 01:03:22] we can use all these different how we can use all these different intrinsics like the active
+[01:03:22 -> 01:03:30] mask, the find first set, the population count, and the shuffle instructions in order for us to
+[01:03:30 -> 01:03:35] do some kind of collaboration between threads in the same warp so that they can collectively
+[01:03:35 -> 01:03:44] accomplish a common objective. Okay, any questions?
+[01:03:53 -> 01:04:00] Okay, well, this is the code that we just wrote, and this is also the final slide I have for today.
+[01:04:00 -> 01:04:03] Does anybody have any final questions before we conclude?
+[01:04:06 -> 01:04:08] I have questions about the project.
+[01:04:09 -> 01:04:12] Okay, sure. Feel free to ask me after after.
+[01:04:18 -> 01:04:22] Okay, if there are no final questions, then that's all for today and I'll see you next time.
+[01:04:22 -> 01:04:23] Bye, everyone.
