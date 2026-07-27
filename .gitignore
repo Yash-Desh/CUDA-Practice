@@ -1,0 +1,25 @@
+# Compiled binaries / executables
+a.out
+*.exe
+*.out
+*.o
+*.obj
+
+# CUDA / PTX intermediates
+*.ptx
+*.cubin
+*.fatbin
+
+# Profiler artifacts
+*.prof
+*.nsys-rep
+*.ncu-rep
+*.qdrep
+*.sqlite
+
+# WSL "downloaded from internet" metadata streams
+*:Zone.Identifier
+
+# Editor / OS cruft
+.DS_Store
+*.swp
