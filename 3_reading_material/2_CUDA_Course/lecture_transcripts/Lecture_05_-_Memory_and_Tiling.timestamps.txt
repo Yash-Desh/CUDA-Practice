@@ -1,0 +1,635 @@
+Title: Lecture 05 - Memory and Tiling
+Video ID: X643zClQ7oI
+Detected language: en
+------------------------------------------------------------
+
+[00:00:03 -> 00:00:16] Hello everyone, and welcome to lecture five of GPU computing. Today we're going to be talking about memory, how the memory in the GPU is organized, and how memory in the CUDA programming model is accessible.
+[00:00:16 -> 00:00:22] And then we will also talk about an important optimization related to memory, and that is tiling.
+[00:00:23 -> 00:00:31] Some of you might already be familiar with tiling if you've taken a GPU course where you've spoken about how to optimize cache accesses on the CPU.
+[00:00:31 -> 00:00:43] Sorry, if you've taken an advanced architecture course and you've spoken about how to optimize cache accesses on a CPU, so tiling we'll be talking about today is very similar to that actually.
+[00:00:43 -> 00:00:49] Before that, let me review what we talked about last time. Last time we talked about the GPU architecture.
+[00:00:49 -> 00:00:59] We said the GPU is organized into SMs or stream of multiprocessors, each SM having its own set of cores that share some control logic and also share some memory.
+[00:00:59 -> 00:01:08] And they all have access to a global memory, which is the same global memory that we were copying data to and from in the previous lecture.
+[00:01:08 -> 00:01:21] We said that threads are assigned to SM on a block-by-block basis at block granularity, which means that all the threads in the same block will be assigned to the same SM.
+[00:01:21 -> 00:01:29] Now, obviously, since an SM has a limited amount of resources, you can only have a limited number of blocks running on an SM at the same time.
+[00:01:29 -> 00:01:41] So if your grid has more blocks than all your SMs can fit simultaneously, then those blocks will simply wait until some block on some SM has finished before the next block can have its turn.
+[00:01:41 -> 00:01:52] We also said that threads within the same block can collaborate in ways that threads of different blocks cannot, hence the benefit of having them scheduled on the same SM.
+[00:01:53 -> 00:02:00] We said that they can synchronize using barrier synchronization, which means they all wait for each other at some point in the code before they keep going.
+[00:02:00 -> 00:02:07] And we also said that they can have access to a fast shared memory that only threads of the same block can access.
+[00:02:07 -> 00:02:10] And we'll actually talk about these two things today.
+[00:02:10 -> 00:02:15] Then they can also collaborate in other ways, which we haven't talked about yet.
+[00:02:15 -> 00:02:27] So we said that for thread scheduling, when blocks are scheduled on SMs, they're divided into units of warps and they're scheduled in units of warps.
+[00:02:27 -> 00:02:34] And we said what's special about warps is that they are executed following the SIMD model.
+[00:02:34 -> 00:02:44] So a warp consists of 32 threads and every 32 threads are executed on an SM following the single instruction multiple data model,
+[00:02:44 -> 00:02:52] which means that we fetch one instruction and we execute it for all the threads in the warp at the same time.
+[00:02:52 -> 00:03:01] Now, if we are in a situation where these threads that are in the same warp take divergent execution paths,
+[00:03:01 -> 00:03:05] what we have to do is we have to do multiple passes through the code. In other words, if I have this warp,
+[00:03:05 -> 00:03:13] these 32 threads that execute this code, if thread index.x is less than 24, do A, then else do B, and then do C.
+[00:03:13 -> 00:03:24] We cannot have threads 0 to 23 execute A, and then at the same time threads 24 to 31 execute B in parallel.
+[00:03:24 -> 00:03:29] They cannot do that because the threads that are in the same warp are bound to the same instruction.
+[00:03:29 -> 00:03:37] So what happens is threads 0 to 23 are going to execute A while threads 24 to 31 are inactive.
+[00:03:37 -> 00:03:46] And then we're going to have a second pass where threads 0 to 23 are inactive while threads 24 to 31 are executing B.
+[00:03:46 -> 00:03:54] And this obviously is a source of inefficiency because here where these threads are inactive, they're still reserving cores, but they're just not using them.
+[00:03:54 -> 00:03:59] So here we have underutilization of the processing units on our GPU.
+[00:03:59 -> 00:04:02] So obviously, we'd like to avoid situations like this.
+[00:04:02 -> 00:04:08] We'd like to avoid cases where threads in the same warp are doing different things, are taking divergent paths in the code.
+[00:04:08 -> 00:04:14] And we will see later on in the course how we can optimize our code to avoid things like this.
+[00:04:14 -> 00:04:21] Another example is if you have a loop, for example, and different threads have a different loop bound.
+[00:04:21 -> 00:04:29] In this case, the threads may initially all be active, but then some threads finish the loop iterations, but others keep going.
+[00:04:29 -> 00:04:43] And basically the threads that have the longest number of loop iterations will hold all the other threads in the warp hostage because those other threads are going to remain inactive until the last thread in the warp is done with this loop iteration.
+[00:04:43 -> 00:04:57] After talking about convergence, we spoke about latency hiding and we said that the way that these warps are scheduled on the SM is that we get a warp and we execute on the cores at the SM.
+[00:04:57 -> 00:05:06] And then once this warp encounters a long latency operation, we put it aside and we bring in another warp to fill in those cycles until this other warp is done.
+[00:05:07 -> 00:05:18] And then if that warp encounters a long latency operation, we bring in another warp until finally this first warp completes its long latency operation and is ready to execute again.
+[00:05:18 -> 00:05:22] And in this case, we bring that warp again and we start to execute it.
+[00:05:22 -> 00:05:33] And by doing this, whenever one warp is not ready to execute the next instruction, bring in another warp and use that warp to execute, we minimize the number of stalls that we have in our pipeline.
+[00:05:33 -> 00:05:45] We minimize the number of empty slots that we have in our pipeline and that results in us being able to tolerate the latency or hide the latency of some warps by executing other warps.
+[00:05:45 -> 00:05:59] And because we would like to hide this latency, we saw that it is desirable for us to have as many warps as possible scheduled on the SM in order for us to hide latency as much as possible.
+[00:05:59 -> 00:06:08] And this brought us to the topic of occupancy where we said that there's a certain maximum number of threads that's allowed to be on the SM at the same time.
+[00:06:08 -> 00:06:16] But depending on how we write and configure our kernel, it might be the case that this maximum is not achieved.
+[00:06:16 -> 00:06:23] So, the ratio of the actual number of threads running on the SM to the maximum that is possible is called the occupancy.
+[00:06:23 -> 00:06:34] And ideally, we'd like to have an occupancy of one, meaning we'd like to have as many threads running as there are maximum allowed. However, it might be the case that this doesn't happen.
+[00:06:34 -> 00:06:41] And for that, we looked at what are the various things that may constrain occupancy.
+[00:06:41 -> 00:06:52] We said that depending on the architecture, there might be a maximum number of threads that can execute on the SM and both of your 12048.
+[00:06:52 -> 00:06:59] But there's also a maximum number of blocks and a maximum number of threads per block. There's also a maximum number of registers and a maximum amount of shared memory for SM.
+[00:06:59 -> 00:07:13] And we'll talk about shared memory today. But basically, the observation was that if I, for example, configure my thread block to have 32 threads, then the maximum number of blocks that I can have is 32.
+[00:07:13 -> 00:07:29] So, 32 blocks, that's 32 threads is 1024 threads. So, if my block, the size of my block is 32 threads, then I will only be able to have 1024 threads running on my SM, which is less than the 2048 threads, which is the maximum that is allowed.
+[00:07:29 -> 00:07:40] So, that was an example of how we may have low occupancy because of the way that we configure the maximum number of blocks.
+[00:07:41 -> 00:07:49] It also depends on the number of registers. For example, if we have too many registers per thread, we might run out of registers before we run out of thread slots.
+[00:07:49 -> 00:07:59] And that also may lead to us under utilizing our SM. So, this was a quick overview of what we covered last time. Any questions?
+[00:07:59 -> 00:08:10] Everything's clear to everyone. Okay.
+[00:08:10 -> 00:08:24] So, today what we're going to do is we're going to talk about memory in the GPU architecture. So, last time we focused on cores, we focused on warps, we focused on a lot of the execution units. Today we're going to look at the memory part.
+[00:08:24 -> 00:08:36] So, we're going to look at the memory in the GPU architecture. We're going to look at memory in the CUDA programming model. In other words, how can we manage the memory in the GPU architecture? What does the CUDA programming model give us access to?
+[00:08:36 -> 00:08:50] We're going to look at how to optimize memory accesses, and we're going to have a running example throughout the lecture, which is again, matrix, matrix multiplication with this time with some more optimizations added, namely the tiling optimization.
+[00:08:50 -> 00:08:59] Okay. So, before I talk about memory in the GPU architecture, I'd like to first discuss performance metrics.
+[00:08:59 -> 00:09:10] So, when a processor designer designs a processor, they usually give us some information about the capabilities of this processor.
+[00:09:10 -> 00:09:16] Okay. So, processor designers inform users about the processor's performance through various metrics.
+[00:09:16 -> 00:09:31] And the most notable metrics that you've probably heard here and there are, one, the flops rate. So, the flops rate of a processor is the number of floating point operations per second that the processor can execute.
+[00:09:31 -> 00:09:44] And what this refers to is how many computations the processor's cores can do per unit time. How many floating point operations can execute per unit time? Of course, assuming that everything else is perfect.
+[00:09:44 -> 00:09:50] Okay, I may not achieve this rate, but this is basically the maximum rate that I can achieve if everything else is perfect.
+[00:09:51 -> 00:10:05] Similarly, we are also told about the bandwidth of a processor, or in other words, the number of bytes per second that a processor's memory can supply to the cores of this processor.
+[00:10:06 -> 00:10:17] Again, this memory bandwidth, if a processor designer tells you that the bandwidth of my memory is bytes per second, this may not necessarily mean that you will get this many bytes per second.
+[00:10:17 -> 00:10:23] It means that if everything else is perfect, then the memory is able to give you this many bytes per second.
+[00:10:24 -> 00:10:39] And these rates vary across processors, and they vary across across generations of the same processor because they depend on how many ALUs, for example, the flops rate depends on how many ALUs I have in my processor, maybe the frequency of my processor.
+[00:10:39 -> 00:10:48] The memory bandwidth depends on the memory technology, how much parallelism I have in my architecture.
+[00:10:48 -> 00:10:57] So if you look at different generations of GPUs recently, you can see how the peak flops rate has changed.
+[00:10:57 -> 00:11:03] Obviously, there's been quite an increase, and you can see how the peak memory bandwidth has changed. So also there's quite an increase.
+[00:11:03 -> 00:11:16] So the V100 GPU, which is the one you've been using in the cluster, it has 14,028 gigaflops, or close to 14 teraflops.
+[00:11:17 -> 00:11:27] And what that means is that it can perform 14 giga is a billion, so it can perform around 14 billion floating point operations per second.
+[00:11:27 -> 00:11:35] And it also has 9, sorry, 14,000 billion, so 14 trillion floating point operations per second.
+[00:11:35 -> 00:11:43] And the bandwidth is 900 gigabytes per second, so it can load 900 billion bytes.
+[00:11:43 -> 00:11:48] The memory can supply us with 900 billion bytes every second.
+[00:11:48 -> 00:11:52] And now again, these metrics are not a guarantee.
+[00:11:52 -> 00:12:04] So if you write a program, if you write a kernel and you run it on the GPU, you're not guaranteed that this kernel is going to perform 14 teraflops.
+[00:12:04 -> 00:12:09] And you're not guaranteed that this kernel is going to receive 900 gigabytes per second.
+[00:12:09 -> 00:12:18] These are the limit. This is not a guarantee that you will reach these peak values, and most often you will not.
+[00:12:18 -> 00:12:28] What this tells you is that it is physically impossible for you to execute more than 14 gigaflops per second.
+[00:12:28 -> 00:12:37] Because if you execute a floating point operation in every single core for every single cycle, then you will get this kind of flop.
+[00:12:38 -> 00:12:49] Similarly, if you load every single byte in the memory interface on every single cycle, so you have perfect utilization of your memory bandwidth, this is what you will get.
+[00:12:49 -> 00:12:54] Okay, so it's not a guarantee you will get these, but it's basically the maximum possible that you can get.
+[00:12:54 -> 00:13:00] But they do serve as good proxies for how powerful a processor is.
+[00:13:00 -> 00:13:10] And they also serve as a good reference for you to compare the performance of your code to see whether you've reached close to these peaks or if you're very far away from them.
+[00:13:10 -> 00:13:17] And that usually gives you an idea on where you stand in terms of the potential performance that your code can get.
+[00:13:17 -> 00:13:29] Okay, any questions about these two metrics? Are they clear?
+[00:13:29 -> 00:13:34] The best question, bandwidth and throughput.
+[00:13:34 -> 00:13:38] Throughput is the actual bandwidth and bandwidth is the theoretical.
+[00:13:38 -> 00:13:46] Okay, so here I will try to be clear, so different people may use different terms for different things.
+[00:13:46 -> 00:13:54] I will try to be clear throughout the lectures when I say bandwidth is what I mean. So here I'm writing the peak memory bandwidth and the peak
+[00:13:54 -> 00:14:01] Flops rate. Okay, and then where we mean achieved, we'll usually say like achieved memory bandwidth or achieved Flops rate.
+[00:14:01 -> 00:14:10] Okay, so there isn't really a fixed convention what we mean by when we say throughput versus bandwidth.
+[00:14:10 -> 00:14:18] Usually the word throughput, we usually, usually the Flops rate, we refer to instruction throughput or floating point throughput.
+[00:14:18 -> 00:14:27] But for the distinction between peak versus achieved, I'll try to be clear so that you don't have that confusion.
+[00:14:28 -> 00:14:31] Okay, thank you. Okay.
+[00:14:31 -> 00:14:38] Okay, so performance bounds, more on performance bounds, an application
+[00:14:38 -> 00:14:44] that runs on a GPU or runs on any processor, it can be compute bound.
+[00:14:44 -> 00:14:51] And what that means, what it means for an application to be compute bound is that it's limited by the Flops rate.
+[00:14:51 -> 00:14:57] Okay, in other words, our processor scores are always fully utilized. They always have something to do.
+[00:14:57 -> 00:15:09] So what's preventing an application from getting more performance is that the processor scores, I don't have more cores to do more work or the processor of course cannot work any faster.
+[00:15:09 -> 00:15:13] In this case, an application would be compute bound.
+[00:15:13 -> 00:15:21] An application is memory bound when the performance of that application is limited by the memory bandwidth.
+[00:15:21 -> 00:15:27] And in this case, the processor scores may be idle at different points of time because they're just sitting there waiting for memory.
+[00:15:27 -> 00:15:39] So in this case, the memory is what's limiting my performance. The memory is preventing my cores from working faster because the memory cannot provide the cores with data fast enough.
+[00:15:39 -> 00:15:46] Okay, so an application is compute bound when it's limited by how fast the cores can go.
+[00:15:46 -> 00:15:56] In this case, the cores could be fully utilized. I mean, my memory is sitting there and happy. It doesn't have much to do because the cores don't have enough data to fully utilize themselves.
+[00:15:56 -> 00:16:06] Or it could be memory bound where the cores are sitting there and waiting for the memory to give them the data, but the memory is the bottleneck. The memory is what's preventing me from going any faster.
+[00:16:07 -> 00:16:17] Okay, now, if we look at these different GPUs that we just saw, you'll notice that the flops rate.
+[00:16:17 -> 00:16:28] Tends to be higher than the memory bandwidth, right? For example, in the full-time view of 100, we can execute 14,000 gigaflops, 14,028 gigaflops per second.
+[00:16:28 -> 00:16:35] But we can only provide the cores with 900 gigabytes per second.
+[00:16:35 -> 00:16:47] Okay, and what that means is this brings us to kind of this metric of the desired compute to global memory access ratio. For short, I'm just writing compute to memory ratio.
+[00:16:47 -> 00:16:53] So, here I mean, compute the global memory access ratio and here by peak memory bandwidth, I mean, the peak global memory bandwidth.
+[00:16:53 -> 00:17:01] So, this desired compute to global memory access ratio is the ratio of the flops to the memory bandwidth.
+[00:17:01 -> 00:17:09] Okay, and it's basically the number of times that a byte that I load has to be reused in order to advertise the memory access.
+[00:17:09 -> 00:17:23] In other words, if I can only provide my cores with 900 gigabytes per second, but my cores can do 14,028 flops per second,
+[00:17:23 -> 00:17:36] then for me to be able to fully utilize my core, for me to be able to do 14,028 gigaflops per second, I need to be doing 15.6 operations per byte on average.
+[00:17:36 -> 00:17:42] So, for every byte that I load, I need to do 15.6 floating point operations.
+[00:17:42 -> 00:17:57] Okay, and remember a floating point value, a single precision is not one byte, it's four bytes. So, here we're looking at 15 times four, which is about 60 floating point operations per floating point value that we load from memory.
+[00:17:57 -> 00:18:06] So, if I really want to reach this peak flops rate, I need to be doing at least 60 floating point operations for every floating point value that I load from memory.
+[00:18:07 -> 00:18:17] Now, of course, this is a very high number. There aren't many applications that do 60 operations for every value that they load.
+[00:18:17 -> 00:18:36] What we're going to be looking at today is what is the typical number of operations per byte that applications do and what we can do in order for us to bridge this disparity between the flops rate and the peak memory bandwidth.
+[00:18:36 -> 00:18:53] Okay, so let's do an example. So, vector addition. If we look at our vector addition example, we saw that every thread in the vector addition was doing z of i is equal to x of i plus y of i.
+[00:18:54 -> 00:19:07] Okay, so just by looking at this code, what is the expected compute to global memory access ratio that you think we can get from this vector, from the vector addition kernel.
+[00:19:07 -> 00:19:19] Okay, and let's ignore store operations for now. Let's only focus on loads. Okay, so what is the, what is the ratio of operations to bytes loaded by the vector addition kernel?
+[00:19:19 -> 00:19:32] One operation every two bytes, assuming x and y are one byte.
+[00:19:32 -> 00:19:40] So we do one operation every two bytes. But remember, this is a floating point value one byte.
+[00:19:41 -> 00:19:48] No, but can be like, what's the floating point with 32 bits, 64 bits.
+[00:19:48 -> 00:19:56] We've been dealing with floats so far. So 32 bits. Usually when you say floating point without saying anything, we mean 32 bits floating point number.
+[00:19:56 -> 00:19:59] Okay, so one operation every eight bytes.
+[00:19:59 -> 00:20:03] Right, exactly. Which is 0.125.
+[00:20:03 -> 00:20:09] So we do one floating point add for every two floating point values, which is eight bytes that we load.
+[00:20:10 -> 00:20:17] What that means is that this vector addition kernel performs 0.125 operations per byte.
+[00:20:17 -> 00:20:29] Okay, now this is very, very far away from the desired 15.6 operations per byte that we want in order to fully utilize our course.
+[00:20:29 -> 00:20:40] So you can expect that vector addition will be what? Compute bound or memory bound? Memory bound.
+[00:20:40 -> 00:20:46] Right, our vector addition kernel is going to be memory bound, right?
+[00:20:46 -> 00:20:51] Because we have so little operations for every byte that we load.
+[00:20:51 -> 00:20:58] So most likely the GPU is going to be, the cores are going to be sitting there most of the time and waiting for the memory operations.
+[00:20:58 -> 00:21:02] Okay, so vector addition is highly memory bound.
+[00:21:02 -> 00:21:14] Okay, the operation, operational intensity or the floating point to global memory access ratio is very, very low.
+[00:21:14 -> 00:21:19] Okay, and this is why we did not see a significant speed up.
+[00:21:19 -> 00:21:26] Because of the massive number of failures. Okay, we didn't see a significant speed up.
+[00:21:26 -> 00:21:31] Between a vector addition for vector addition between GPU and CPU.
+[00:21:31 -> 00:21:36] Because this massive number of ALUs that we got was idle most of the time.
+[00:21:36 -> 00:21:46] Okay, we have this massive number of ALUs that we added, but the application is limited by the global memory bandwidth. So these ALUs are not doing useful work most of the time.
+[00:21:46 -> 00:21:59] So this is why if we remember when we saw how much performance improvement we got from vector addition, and then we looked at other computations, we saw that these other computations were actually giving us more speed up.
+[00:22:00 -> 00:22:10] And this is the explanation for that. Vector addition is memory bound. So throwing more compute at it is going to give you only a little bit of improvement.
+[00:22:10 -> 00:22:16] Okay, and the sadder part here is that there's not much we can do.
+[00:22:16 -> 00:22:22] Okay, here with vector addition, there's not many, there aren't many optimizations that you can do to make it go faster.
+[00:22:22 -> 00:22:34] Right, it's such a simple kernel and this low ratio of operations to bytes accessed is inherent in the application itself.
+[00:22:34 -> 00:22:41] Okay, now let's look at a different application. Let's now look at matrix multiplication.
+[00:22:41 -> 00:22:48] So the matrix multiplication that we wrote earlier, every thread was doing this.
+[00:22:48 -> 00:23:04] Okay, it had a loop and it was doing this. So what is the, for this particular code of matrix multiplication, what is the, what is the, what is the, the operations for the compute to global memory access ratio?
+[00:23:04 -> 00:23:15] It depends on N, no? Depends on what? N? The width? It doesn't depend on N?
+[00:23:15 -> 00:23:33] It doesn't, it doesn't depend on N, at least not for this particular code.
+[00:23:33 -> 00:23:47] So how many floating point, so some of you are asking if integer operations count. No, let's ignore integer operations. So let's ignore these address computations.
+[00:23:47 -> 00:23:51] Right, integer is usually faster than floating point.
+[00:23:51 -> 00:24:02] And ultimately the useful stuff is to us, it's floating point, right? These integers are just kind of supporting operations for the real operations that we care about, which are the floating point operation.
+[00:24:02 -> 00:24:12] Okay, so how many floating point operations are we doing? Right, we're doing two floating point operations. Let's multiply over here and this add over here for every loop iteration.
+[00:24:13 -> 00:24:27] And how many bytes do we load? Eight, right? So we can do two floating point operations for every eight bytes. Our floating, our compute to global memory access ratio is 0.25 operations per byte. It's a little bit better than vector addition.
+[00:24:27 -> 00:24:31] But this is still pretty low.
+[00:24:31 -> 00:24:34] Okay, this is still pretty low.
+[00:24:34 -> 00:24:39] Okay, however, unlike vector addition.
+[00:24:39 -> 00:24:46] Matrix matrix multiplication actually has a very high potential for data reuse.
+[00:24:46 -> 00:24:59] Okay, so here we saw how the specific kernel that we implemented, how many operations it does compared to how many global memory accesses that it does.
+[00:24:59 -> 00:25:02] But let's look at the potential for data reuse.
+[00:25:02 -> 00:25:08] Okay, let's just look at how much it actually does. Let's look at how much it needs to do.
+[00:25:08 -> 00:25:16] So, what is the total number of floating point operations that matrix matrix multiplication needs to do?
+[00:25:16 -> 00:25:25] I have an N by N times N by N matrix, giving me an N by N matrix. What is the total number of floating point operations that need to be done?
+[00:25:25 -> 00:25:43] It's not N and it's not N squared. N cubed, right?
+[00:25:43 -> 00:25:51] N cubed and for these N cubed operations, there's a multiply and there's an add.
+[00:25:51 -> 00:25:55] Okay, so we have actually two N cubed.
+[00:25:55 -> 00:26:02] Okay, so matrix matrix multiplication has high potential for data reuse for N by N matrix.
+[00:26:02 -> 00:26:10] Okay, like you guys said, we have two N cubed operations. What about the data that we need to load?
+[00:26:11 -> 00:26:15] Okay, assuming we load every piece of data that we need to load only once.
+[00:26:15 -> 00:26:27] How much data does matrix matrix multiplication use? I have two input matrices.
+[00:26:27 -> 00:26:34] Okay, and each of these input matrices has N squared values and each of these values has four bytes.
+[00:26:34 -> 00:26:40] Okay, so in total, I have eight N squared bytes that I need to load,
+[00:26:40 -> 00:26:43] assuming I don't load any of them redundantly.
+[00:26:43 -> 00:26:52] And I have N squared dot product. Each dot product is N adds plus N multiplications. I have two N cubed operations.
+[00:26:52 -> 00:27:03] So if I divide two N cubed by eight N squared, the potential compute to the ratio that I can achieve is actually 0.25 N
+[00:27:03 -> 00:27:15] ops per byte. Okay, this is the kind of the maximum compute to the ratio that I can achieve. It's not necessarily what I will achieve.
+[00:27:16 -> 00:27:25] But if I kind of rewrite my code in a way where somehow I can reuse the data that I access,
+[00:27:25 -> 00:27:31] my access from global memory rather than having to load it from global memory every time.
+[00:27:31 -> 00:27:38] Okay, then maybe somehow I can have something that's higher than this and closer to this.
+[00:27:38 -> 00:27:42] Okay, and let's see how we can do that.
+[00:27:43 -> 00:27:50] But what this indicates, what this indicates is that matrix-matrix multiplication has the potential, has high potential for data reuse.
+[00:27:50 -> 00:27:56] In other words, it has high potential for having a high compute to memory ratio.
+[00:27:56 -> 00:28:00] Let's take a look at where this comes from.
+[00:28:00 -> 00:28:10] So a reuse in matrix-matrix multiplication, every element in my input matrix, in input matrices matrix-matrix multiplication
+[00:28:10 -> 00:28:15] is used for computing an entire row.
+[00:28:15 -> 00:28:22] Here, this element in blue is used for computing all these elements in orange.
+[00:28:22 -> 00:28:26] Okay, so in the way that I've been paralyzing it,
+[00:28:26 -> 00:28:31] the threads that have been assigned to all these elements in orange are all loading the same data.
+[00:28:31 -> 00:28:35] They all go to global memory and load this data.
+[00:28:35 -> 00:28:45] Similarly, every element in the matrix B is used for computing an entire column.
+[00:28:45 -> 00:28:51] So every element, the threads that are computing the elements in these columns,
+[00:28:51 -> 00:28:56] every thread is accessing the same value over here, redundantly from global memory.
+[00:28:57 -> 00:29:05] And what this reflects is that we have an opportunity to optimize the memory accesses in the kernel
+[00:29:05 -> 00:29:10] so that we can reuse the input data that we load from global memory as much as possible.
+[00:29:10 -> 00:29:18] So basically, rather than me having to load this data from global memory for each one of these output elements,
+[00:29:18 -> 00:29:24] maybe there is some way for me to load this data somewhere
+[00:29:24 -> 00:29:29] and then have maybe only some threads load this data
+[00:29:29 -> 00:29:35] and then other threads be able to access this data without having to go to global memory.
+[00:29:35 -> 00:29:40] And what this would do is it will reduce the number of global memories.
+[00:29:40 -> 00:29:47] This would reduce the number of global memory accesses that we have and ultimately improve performance.
+[00:29:47 -> 00:29:51] Okay, so let's see how to do this.
+[00:29:51 -> 00:29:56] So before we see how to do this, let me now jump, having given this motivation,
+[00:29:56 -> 00:30:00] let me talk about memory in the GPU architecture.
+[00:30:00 -> 00:30:08] So before we saw that an SM has streaming processors and it has the share control logic
+[00:30:08 -> 00:30:13] and that all these SMs share access to global memory.
+[00:30:14 -> 00:30:21] Now this access to this global memory typically takes of the order of 500 cycles.
+[00:30:21 -> 00:30:29] Okay, so obviously going to global memory is not something that I particularly like to do.
+[00:30:29 -> 00:30:33] Now the SMs also have registers.
+[00:30:33 -> 00:30:39] Okay, you guys are familiar with registers and a register usually takes one cycle to access, right?
+[00:30:39 -> 00:30:45] Not even that, because the same instruction that does the arithmetic operation
+[00:30:45 -> 00:30:48] is going to reach from the register file and right to the register file.
+[00:30:48 -> 00:30:57] So we access registers for free. We get them in the same cycle that we execute our instruction.
+[00:30:57 -> 00:31:03] Okay, we also have an L1 cache. So an SM
+[00:31:03 -> 00:31:09] has an L1 cache and those of you who are familiar with computer architecture, you know what an L1 cache is.
+[00:31:09 -> 00:31:17] Basically when you load data from global memory, there's a cache that keeps that data there in case you access it again.
+[00:31:17 -> 00:31:25] And that way frequently access data tends to stay in the cache rather than having to go get it from global memory every time.
+[00:31:25 -> 00:31:34] And there's also a shared memory. The shared memory, also the L1 cache, typically takes five cycles to access.
+[00:31:34 -> 00:31:40] And this shared memory is similar to the L1 cache, but it is managed by the program.
+[00:31:40 -> 00:31:50] So here when you get something from global memory and you're frequently accessing it, the L1 cache automatically puts that data here for you.
+[00:31:50 -> 00:31:55] Okay, but shared memory is not managed by the hardware, it's managed by the program.
+[00:31:55 -> 00:32:04] So what the programmer can do is they can take data from global memory and put it in shared memory and then they can start accessing it from shared memory.
+[00:32:04 -> 00:32:13] And we'll take a look at how to do that. And then finally, well not finally, but we have another kind of on-chip memory, which is the constant cache.
+[00:32:13 -> 00:32:19] And we're not going to talk about that today, we're going to talk about it later. So as the name says, constant cache
+[00:32:19 -> 00:32:24] will hold some kind of constant data, also similar access time to the L1 cache and shared memory.
+[00:32:24 -> 00:32:32] And then finally, we have an L2 cache, and the L2 cache is on-chip. Here the global memory is DRAM.
+[00:32:32 -> 00:32:38] It's not on the same chip as the SMs. The L2 cache is on the same chip as the SMs.
+[00:32:38 -> 00:32:47] And all the SMs have access to the same L2 cache. So L2 cache is basically just a cache for global memory that's on-chip.
+[00:32:47 -> 00:32:54] Okay, so this is how the memory architecture of a GPU.
+[00:32:54 -> 00:32:58] Now let's look at the memory model in CUDA.
+[00:32:58 -> 00:33:06] The CUDA programming model, we saw before that grids are divided into blocks and blocks consist of multiple threads.
+[00:33:06 -> 00:33:14] Well, each thread has access to its own private registers.
+[00:33:14 -> 00:33:26] And then each of the threads in the same thread block have access to the same shared memory.
+[00:33:26 -> 00:33:30] So all the threads in the same block can access the same data and shared memory.
+[00:33:30 -> 00:33:37] They cannot access the data and shared memory of other blocks.
+[00:33:37 -> 00:33:45] All the threads in the grid have access to the same global memory.
+[00:33:45 -> 00:33:48] And they also all have access to the same constant memory.
+[00:33:48 -> 00:33:52] So anything in global memory or constant memory is accessible to all threads in a grid.
+[00:33:52 -> 00:33:58] But the registers are private to a thread and shared memory is private to a block.
+[00:33:58 -> 00:34:01] But it's shared across all the threads in them.
+[00:34:01 -> 00:34:09] Okay, so someone's asking shared memory, constant cache and L1 cache are physically unified, right?
+[00:34:09 -> 00:34:14] So that's a micro-architecture detail.
+[00:34:15 -> 00:34:22] For example, in some architectures, they let you configure how much L1 cache versus how much shared memory you want.
+[00:34:22 -> 00:34:26] So you can have that kind of a trade-off between shared memory and L1 cache.
+[00:34:26 -> 00:34:31] So you can say I want more L1 cache, less shared memory or less L1 cache and more shared memory.
+[00:34:31 -> 00:34:40] So in that sense, they're somehow unified. Constant memory is a little different.
+[00:34:40 -> 00:34:48] Okay, someone's asking what about L1 cache? Well, is the L1 cache part of the programming model?
+[00:34:48 -> 00:34:56] Good question. I guess the developer doesn't have a say in it. The programmer doesn't. Right, exactly.
+[00:34:56 -> 00:35:04] So the reason over here you don't see L1 cache and L2 cache is because over here I'm illustrating the programming model.
+[00:35:04 -> 00:35:10] And the L1 cache and the L2 cache are managed by the hardware. So they're there in the hardware, but we don't see them in the programming model.
+[00:35:10 -> 00:35:14] We don't have access to them. The programmer can't manage them.
+[00:35:14 -> 00:35:22] Okay, so the nice thing is that we can match the shared memory and we can manage our registers.
+[00:35:22 -> 00:35:31] And we've already seen how to manage global memory. Registers are usually these local variables that the compiler manages.
+[00:35:31 -> 00:35:39] But the nice thing here is we have this constant memory that we'll talk about next time and the shared memory that we'll talk about today that the programmer can manage.
+[00:35:39 -> 00:35:45] And we can take advantage of shared memory in order for us to reduce how much we need to go to global memory.
+[00:35:45 -> 00:35:58] Okay, let's see how we can use this shared memory. So CUDA gives us these various qualifiers to help the programmer specify where they want particular data to reside.
+[00:35:59 -> 00:36:06] Okay, so we've already seen that CUDA malloc allocates in global memory from the host.
+[00:36:06 -> 00:36:13] We actually have another way to allocate global memory statically. CUDA malloc allocates global memory dynamically.
+[00:36:13 -> 00:36:23] But we can actually just declare a variable and precede it with this keyword underscore underscore device underscore underscore.
+[00:36:23 -> 00:36:29] And this global variable will go in global memory.
+[00:36:29 -> 00:36:41] And the scope of the global variable will be the entire grid. What I mean by the scope will be the entire grid means that we have the same copy of the global variable accessible to all the threads of the grid.
+[00:36:41 -> 00:36:45] So, all the threads of the grid access the same copy of this global variable.
+[00:36:45 -> 00:36:55] And the lifetime of this global variable is the entire application that can launch grid after grid and all these grids will see the same copy of this global variable.
+[00:36:55 -> 00:37:00] And if a previous grid writes to a global variable, a later grid can access this global variable.
+[00:37:00 -> 00:37:07] Okay, and obviously this global variable will have to be declared outside of the kernel. You can't just declare it inside a kernel.
+[00:37:07 -> 00:37:23] Okay, we also have constant data. So, constant data is placed in constant memory. However, similar to global variables, their scope is an entire grid, meaning all threads have access to the same value and their lifetime is the whole application.
+[00:37:25 -> 00:37:34] And then if we proceed our declaration with device and shared, then this is how we declare a shared variable.
+[00:37:34 -> 00:37:44] And this shared variable is going to go in shared memory. And now for this variable, every block is going to have a unique copy of this variable.
+[00:37:45 -> 00:37:55] Okay, and the lifetime of the variable will be in the block only. So, once the block is done, other blocks cannot see the shared variable of one block.
+[00:37:56 -> 00:38:12] Okay, so when I declare something like this, if I write device shared, I don't have to write devices optional. If I write shared int something inside of my kernel, this shared variable is going to be a copy of this variable for every different block.
+[00:38:12 -> 00:38:17] But the threads in the same block share the same copy of this variable.
+[00:38:18 -> 00:38:27] And then I have local variables. So, if I write something like int local var, right, and we've been using this all the time, we've been declaring these local variables, this will go in a register.
+[00:38:27 -> 00:38:32] And here the scope is the thread, meaning every thread has a unique copy of it.
+[00:38:32 -> 00:38:38] Okay, so if I write something like int i equals something, every thread is going to have a different copy of i.
+[00:38:38 -> 00:38:43] And the lifetime of this i is the thread. So, once it's gone, that i is gone.
+[00:38:43 -> 00:38:54] And then finally we have local arrays. So, these local arrays are similar to local variables in that their scope and lifetime is the thread, but they're different in that they go in global memory.
+[00:38:55 -> 00:39:02] So, and these are actually not frequently used, these local arrays, they're not frequently used. They're a feature of C.
+[00:39:02 -> 00:39:09] So, in support of the C standards, they're supported, but they're not actually frequently used by programmers.
+[00:39:09 -> 00:39:19] Okay, so we'll talk about constant memory allocation and initialization later. For today, what we're going to focus on is shared memory, or another word for it, the scratchpad.
+[00:39:19 -> 00:39:22] So, today we're going to focus on this shared memory over here.
+[00:39:24 -> 00:39:33] So, somebody's asking if we need to access shared variables, we need to synchronize. You're absolutely right. And we'll look at how to do that today.
+[00:39:34 -> 00:39:41] Okay, so having introduced this, let's go back to shared matrix matrix multiplication.
+[00:39:41 -> 00:39:54] So, previously, what we did is we divided out when we wanted to paralyze our matrix matrix multiplication, we divided our output matrix into tiles or blocks.
+[00:39:54 -> 00:40:00] And we assigned a thread block for each tile, and we assigned threads to each element in that tile.
+[00:40:01 -> 00:40:10] So, what you'll notice here is that the threads that compute each of these four output elements all load the same row, they all access the same data.
+[00:40:12 -> 00:40:24] And similarly, the threads that compute, the four threads that are assigned to these four output elements in this block are all going to load the same column of V.
+[00:40:25 -> 00:40:36] So, what can we do here? Knowing now that threads in the same block can manage this, have access to the same shared memory, and that shared memory is fast to access. What can we do?
+[00:40:37 -> 00:41:01] Right, we can share, we can share the input. So, rather than having all four of the threads processing these four elements, each load this element from global memory, and this element from global memory, and this element from global memory, etc.
+[00:41:01 -> 00:41:15] What we can do is we can have the threads that are in the same block somehow collaborate to share, to load elements from global memory into shared memory, and then reuse them from shared memory.
+[00:41:16 -> 00:41:19] Okay, so here's what we're going to do.
+[00:41:20 -> 00:41:37] Oh, before I say, so the fact that these four threads load these same four, these same column elements, and these four threads all run on the same SM, means that if we are,
+[00:41:37 -> 00:41:52] right, the threads might find the data in the L1 cache. Okay, so when I load, when multiple threads are loaded the same data from global memory, if they load close enough in time, they might find that data in the L1 cache.
+[00:41:52 -> 00:41:58] So, if we're lucky, we can find it in the L1 cache because recently some other thread loaded it.
+[00:41:59 -> 00:42:12] Okay, but if we are not lucky, so sometimes you're not lucky, the data might get evicted from the L1 cache, okay, before the thread is, the next thread that needs it tries to access.
+[00:42:13 -> 00:42:28] And on GPU, it's actually quite frequent for data to get evicted from the L1 cache. Why? Why is it more likely on the GPU for something to get evicted from the L1 cache than on the CPU?
+[00:42:29 -> 00:42:31] Because things can execute out of order.
+[00:42:31 -> 00:42:35] What do you mean?
+[00:42:35 -> 00:42:39] Like, there's no temporal locality to things, maybe?
+[00:42:39 -> 00:42:47] There is temporal locality. If I have two threads, and these two threads are executing on the GPU, and they're sharing the same data.
+[00:42:47 -> 00:42:53] Okay, so there's temporal locality, but across threads. Okay, so collectively they have temporal locality.
+[00:42:53 -> 00:43:09] Right? Why is it less likely for the thread to find its data in the L1 cache than, for example, on a CPU if I have two threads that are accessing the same data?
+[00:43:09 -> 00:43:14] Well, someone pointed out L1 cache is smaller. Fine. So, caches are smaller on the GPU.
+[00:43:14 -> 00:43:23] There's another reason. So, the other reason is that I have many more threads.
+[00:43:23 -> 00:43:29] Right? So, if I have two threads on the CPU and they're accessing nearby data.
+[00:43:29 -> 00:43:36] Right? So, then they're very likely to find that data in the cache.
+[00:43:36 -> 00:43:44] But on the GPU, if I have 2,048 threads running on the GPU, if two of those threads are sharing data, well, there's so many other threads that are not.
+[00:43:44 -> 00:43:49] Okay? So, the probability of getting your data evicted is very high.
+[00:43:50 -> 00:44:01] And for that, sometimes we might want to rely on the L1 cache for some things, but for some things where we know that the data reuse is extremely high.
+[00:44:01 -> 00:44:11] Like matrix multiplication, it's probably better for us not to rely on the L1 cache, but to try and do the caching ourselves using shared memory.
+[00:44:11 -> 00:44:16] So, the solution here is to let the threads work together to load part of the data.
+[00:44:17 -> 00:44:26] And ensure that all the threads that need to use and access it before we load more data. And we're going to use shared memory to ensure that the data stays close by.
+[00:44:26 -> 00:44:39] And this optimization is called tiling because we divide our input into tiles of data and reload those tiles to shared memory and let all the threads access them and then load the next file, etc.
+[00:44:39 -> 00:44:43] So, let me show you what tiling for matrix multiplication.
+[00:44:43 -> 00:44:58] So here, if I have this matrix that I divided into tiles, and I assigned a thread block for each tile. So here, the thread block that's assigned to the center tile over here.
+[00:44:58 -> 00:45:01] Has a thread processing each of these input elements.
+[00:45:02 -> 00:45:08] Okay, what I can do is I can divide my input matrices as well into tiles.
+[00:45:09 -> 00:45:18] And then rather than having each of these threads load all the elements they need from global memory themselves.
+[00:45:18 -> 00:45:29] I can have this block of threads load the blue tile of A into shared memory and the blue tile of B into shared memory.
+[00:45:30 -> 00:45:37] Okay, so now I have, so the step one is to load the first tile of each input matrix into shared memory.
+[00:45:37 -> 00:45:49] And then I will have the threads that are assigned to this output tile of the matrix access shared memory to do the partial dot product.
+[00:45:49 -> 00:46:03] Okay, so each thread is going to do a partial dot product on these tiles of shared memory. So the thread for this first element will go through shared memory and access this row as well as this column.
+[00:46:03 -> 00:46:10] The thread responsible for the second element will access this row from shared memory and this column, etc.
+[00:46:10 -> 00:46:17] Okay, and then all these threads wait for each other to finish accessing this shared memory.
+[00:46:17 -> 00:46:27] Okay, and when they're done, I can go back to my global memory and bring back to bring in my next file. So then these threads, the next time from shared memory.
+[00:46:28 -> 00:46:32] Okay, and then the next until we are done.
+[00:46:32 -> 00:46:43] Now, what do you notice here? What you notice is that this thread that was responsible for for loading for processing this element.
+[00:46:43 -> 00:46:48] Before it was loading all the points in the row of A.
+[00:46:48 -> 00:46:55] Now, it's only going to load 1, 2, 3 elements from A.
+[00:46:55 -> 00:47:00] The other elements are going to be loaded by the other threads into shared memory.
+[00:47:00 -> 00:47:03] And this thread is going to be able to access them from shared memory.
+[00:47:03 -> 00:47:11] Okay, is this clear to everyone? Last point.
+[00:47:11 -> 00:47:16] So before, in my original matrix matrix multiplication code.
+[00:47:16 -> 00:47:22] Every thread was loading an entire row of A and an entire column of B.
+[00:47:23 -> 00:47:30] Okay, now every thread. So now what happens when I go to tiling.
+[00:47:30 -> 00:47:34] Is that these 4 by 4 threads.
+[00:47:34 -> 00:47:37] Are going to load this 4 by 4 tiles.
+[00:47:37 -> 00:47:45] Thread is every thread assigned in my thread block is going to load 1 element in this tile.
+[00:47:45 -> 00:47:51] Originally, this thread was going to load 1, 2, 3, 4 elements.
+[00:47:51 -> 00:47:55] From this tile, but now it's only going to load 1 element from this tile.
+[00:47:55 -> 00:48:00] The other elements will be loaded by the other threads and then this thread will access it from shared memory.
+[00:48:00 -> 00:48:08] Okay, so for every thread is going to do a global memory load once per tile, as opposed to once per element.
+[00:48:08 -> 00:48:12] Okay, so every thread loads once.
+[00:48:12 -> 00:48:17] And they all access from shared memory 4 times.
+[00:48:17 -> 00:48:21] Okay, and rather than loading 4 times.
+[00:48:21 -> 00:48:26] And again, every thread will load once instead of 4 times, but the access from shared memory 4 times.
+[00:48:26 -> 00:48:30] And then again, every thread will load once and then access from shared memory 4 times.
+[00:48:30 -> 00:48:35] Okay, so in general, if I have a tile width by tile width.
+[00:48:35 -> 00:48:42] Tile size, then every thread will reduce its number of global accesses by the tile width.
+[00:48:42 -> 00:48:47] Because rather than loading the entire row, they do 1 load for every tile width.
+[00:48:47 -> 00:48:55] Elements and then they access tile width elements from the shared memory.
+[00:48:55 -> 00:49:05] Okay, clear. All right, let's do, let's, let's write a code example to make this more concrete.
+[00:49:05 -> 00:49:09] I'm going to switch now to my code.
+[00:49:09 -> 00:49:29] Oops, I got disconnected 1 second. Okay, so here, this is the previous matrix, matrix multiplication code that we wrote.
+[00:49:29 -> 00:49:37] You see, we have row, column, we initialize this, we loop over the entire, we loop over the entire.
+[00:49:37 -> 00:49:43] Dot product and then we do, we accumulate the sum to the sum and then we store the result.
+[00:49:43 -> 00:49:49] Okay, so let's compile this code and remember how it performed. Okay.
+[00:49:49 -> 00:49:57] So here, this is the performance of my CPU code and my GP code. So it was 2 milliseconds on the GPU for the kernel itself.
+[00:49:57 -> 00:50:05] The whole, with the copy time, it takes around 4 milliseconds. So now let's go and try and implement this optimized.
+[00:50:05 -> 00:50:16] We talked about where rather than doing things this way, we use tile, shared memory tiling. Okay, so I'm going to get rid of this code.
+[00:50:16 -> 00:50:24] Okay, I still have every thread responsible for a specific row and a specific column.
+[00:50:24 -> 00:50:32] But what I'm going to do is rather than having the thread loop through the entire row.
+[00:50:33 -> 00:50:36] What I'm going to do is I'm going to loop through the tiles.
+[00:50:36 -> 00:50:48] So the thread blocks in the threads of the same block are together in a loop through the tiles. Okay. So how many tiles do I have?
+[00:50:48 -> 00:51:00] Well, I find here a variable tile. So tile div is 32. So my tiles here are going to be 32 by 32 and my block size is also going to be along the lines of my tile.
+[00:51:00 -> 00:51:08] So my block size will also be 32 by 32, because I have one thread per block for every element in my output.
+[00:51:08 -> 00:51:22] Okay, so the number of tiles that I have is going to be n over the tile width. So if my block is 32, then the number of tiles is going to be n over 32.
+[00:51:22 -> 00:51:26] Okay, so here the first thing that I'm going to do.
+[00:51:26 -> 00:51:53] What I'm going to do is I want to loop over the tiles. So I'm going to call, I'm going to write unsigned end tile equals zero tile is less than n over tile div and plus plus tile.
+[00:51:53 -> 00:51:56] So this is my first step.
+[00:51:56 -> 00:52:09] Now, when I loop over these tiles, what do I want to do? So for every tile, now the first tile is going to be zero, then my tile index is going to be one, then my tile index is going to be two, etc.
+[00:52:09 -> 00:52:17] Okay, so now that I'm working on a specific tile, what do I want to do? Well, I want to load this tile into shared memory.
+[00:52:17 -> 00:52:23] And I also want to load the corresponding B tile into shared memory.
+[00:52:23 -> 00:52:35] Okay, now somebody is asking me how I chose tile-dim. I'm going to talk a little bit about that later. Okay, so hold on to that question. But for now, I'm just going to set tile-dim to be 32 by 32.
+[00:52:35 -> 00:52:44] So now what I want to do is load this data into shared memory.
+[00:52:44 -> 00:52:49] And to do that, I need to declare arrays in shared memory.
+[00:52:49 -> 00:53:01] So what I'm going to need is I'm going to need a two-dimensional array shared memory that's tile width by tile width to store A, and another two-dimensional array shared memory to store tile width by tile width tile of B.
+[00:53:01 -> 00:53:14] Okay, and the way I declare that is as follows. I'm going to write, remember we have a shared qualifier, sorry, underscore, underscore, shared, underscore, underscore.
+[00:53:14 -> 00:53:27] Okay, and then float and then A, and a convention that you don't have to follow, but that I sometimes follow is underscore S. When I write underscore S, that's just to remind me that this is a shared memory variable.
+[00:53:27 -> 00:53:40] Okay, and this two-dimensional array is going to be tile width by tile width in size. So I'm going to have tile width by tile width shared memory array for A.
+[00:53:40 -> 00:53:50] And I also want a tile width by tile width shared memory array for B. Okay, so I'm also going to declare a tile width by tile width shared memory array for B.
+[00:53:50 -> 00:54:03] Okay, now what do I do? Now that I have these shared memory arrays, now what I want to do is load, I want each thread to load one element
+[00:54:03 -> 00:54:09] of the global memory tile and put it in the shared memory tile.
+[00:54:09 -> 00:54:19] Okay, that corresponds to what happens here. So I want each thread to load a global memory tile and load it into a shared memory tile.
+[00:54:19 -> 00:54:28] Okay, let's do that. So here, the thread over here at row
+[00:54:28 -> 00:54:36] and column is going to be responsible for loading this element over here of A. So same row.
+[00:54:36 -> 00:54:42] Okay, but then it has to use the tile to somehow find the column.
+[00:54:42 -> 00:54:51] Okay, let's try to do that. So what we need to do is we need to load into A of S.
+[00:54:51 -> 00:54:58] Okay, I'm going to give it some index and then some other index. I'm going to load A.
+[00:54:58 -> 00:55:08] And then when I access A, I'm going to give it some index times the width of A, which is N plus some index.
+[00:55:08 -> 00:55:13] Okay, and then similarly for B,
+[00:55:13 -> 00:55:17] to load into B of S at some index, some index
+[00:55:17 -> 00:55:24] from B of some index times N plus some index. So now we need to figure out these indices.
+[00:55:24 -> 00:55:35] Okay, now let's first start at where we're loading from A. So if a thread that's responsible for row and call,
+[00:55:35 -> 00:55:49] okay, the thread responsible for this element is going to load this element. Well, what is the index of this? What is the row index of this element? Well, it's going to be the index of the tile.
+[00:55:49 -> 00:55:59] Okay, times the size of the tile. Let me go to the next slide just to make this more clear. So here for this thread wants to load this element.
+[00:55:59 -> 00:56:03] So the index of this element is going to be the index of the tile.
+[00:56:03 -> 00:56:13] Okay, times the size of the tile, which is tiled in. And then plus, well, the thread that has thread index.y0 is going to load.
+[00:56:14 -> 00:56:20] Actually, let me focus on A, not on B first. So here I'm going to load tile.
+[00:56:20 -> 00:56:28] Times the tile index here is one, times the tile width, which is four in this illustration, but it's going to be 32 in my code. Okay. And then plus,
+[00:56:28 -> 00:56:35] the thread that has thread index.x is going to load tile times tile width plus zero.
+[00:56:35 -> 00:56:40] So the thread with tile index.x0 is going to load tile times tile width plus zero.
+[00:56:40 -> 00:56:47] The thread with thread index.x equals one is going to load tile times tile width plus one.
+[00:56:47 -> 00:56:55] The thread that has thread index.x equals two is going to load tile times tile width plus two, et cetera. So in general.
+[00:56:55 -> 00:57:03] Okay, I'm going to load from the same row.
+[00:57:03 -> 00:57:12] Same row, okay.
+[00:57:12 -> 00:57:21] Times N to get here. And then the offset from here to the end element that I want is going to be the tile index times the tile width.
+[00:57:21 -> 00:57:31] The tile times tiled in.
+[00:57:31 -> 00:57:42] And then plus, over here, like we said, the thread index.x equals zero will load just the element at offset zero.
+[00:57:43 -> 00:57:49] The one with one will load the element at offset one, et cetera. So it's going to be thread index.x.
+[00:57:49 -> 00:57:57] Okay. And then where do I put this result? Well, if we go back to this illustration here,
+[00:57:57 -> 00:58:01] when this thread loaded this element from here,
+[00:58:01 -> 00:58:08] regardless of what tile this element was in and always put it at element zero.
+[00:58:08 -> 00:58:19] So the thread that loaded the element at index zero zero in the tile is going to put the element in this tile is going to put the element at zero zero in the shared memory tile.
+[00:58:19 -> 00:58:23] Okay, so what's the shared memory?
+[00:58:23 -> 00:58:33] We're going to use the thread index to store the results. It's going to be thread index.y and thread index.x.
+[00:58:34 -> 00:58:39] Okay, in other words, the thread responsible for this output element will load into this element.
+[00:58:39 -> 00:58:43] The thread responsible for this output element will load into this element, et cetera.
+[00:58:43 -> 00:58:50] So the thread index within the block is going to be the index into the shared memory tile that we used.
+[00:58:50 -> 00:58:56] Okay, now same thing for block index.x. For block index.x,
+[00:58:56 -> 00:59:03] if we look at block index.x, for example, sorry for BS.
+[00:59:03 -> 00:59:09] So for BS, we want to load from the tile of B.
+[00:59:09 -> 00:59:15] So it's going to have same column index. So this thread is going to load this element.
+[00:59:15 -> 00:59:22] This thread is going to load this element. This thread is going to load this element. This thread is going to load this element.
+[00:59:22 -> 00:59:28] Okay, so the column index is going to be the same as the thread itself.
+[00:59:28 -> 00:59:33] Okay, but this is going to differ.
+[00:59:33 -> 00:59:37] The row index is going to be a tile index.
+[00:59:37 -> 00:59:42] Times the size of the dimension of the tile that brings us to the beginning of the tile.
+[00:59:42 -> 00:59:48] So here, my row index is going to be tile times.
+[00:59:48 -> 00:59:54] Tile them, okay, plus the thread responsible.
+[00:59:54 -> 01:00:01] The thread that has thread index.y is zero, responsible for this element, and it's going to load this element.
+[01:00:01 -> 01:00:09] So there's no offset. The thread with thread index.y is one, is responsible for this element, and it's going to load this element in the tile.
+[01:00:09 -> 01:00:14] Okay, so index is going to be thread index.y.
+[01:00:16 -> 01:00:27] Okay, where is this result going to go? Well, again, this tile is going to be loaded into a shared memory array that just has this value over here.
+[01:00:27 -> 01:00:38] Okay, so if we go back to this illustration here, the thread is going to use its own local index to store to the tile.
+[01:00:38 -> 01:00:44] Okay, sorry.
+[01:00:44 -> 01:00:50] Can you repeat why it's thread.y and it was lagging.
+[01:00:50 -> 01:00:58] You mean over here? Yes.
+[01:00:58 -> 01:01:07] Yes, let me repeat that. So, over here,
+[01:01:07 -> 01:01:15] this thread is responsible for loading this element. This thread is responsible for loading this element, etc.
+[01:01:15 -> 01:01:19] So, how do I get to this element? Well, it's going to be
+[01:01:19 -> 01:01:24] the number of elements in the previous tiles, which is tile times the dimension of the tile,
+[01:01:24 -> 01:01:30] plus the position of the thread in the thread block.
+[01:01:30 -> 01:01:42] Right, so this thread, the thread 00 in the thread block is going to load element 00 within the tile.
+[01:01:42 -> 01:01:49] Okay, that's why we use the thread index.y to figure out which element to load.
+[01:01:49 -> 01:02:03] Okay. All right, so here, similarly, we're going to use thread index.y and thread index.y.
+[01:02:03 -> 01:02:15] So now what we have done is we loaded this tile of B and this tile of A into shared memory.
+[01:02:15 -> 01:02:19] Okay, now what we want to do is we want to compute with them.
+[01:02:19 -> 01:02:23] Okay, so we're going to loop over the shared memory tiles
+[01:02:23 -> 01:02:28] and do the dot product of this partial row with this partial column, for example.
+[01:02:28 -> 01:02:35] Okay, how do we do that? Well, we do, we simply loop. We do four,
+[01:02:35 -> 01:02:40] and i is equal to zero.
+[01:02:40 -> 01:02:46] i is less than what? Well, i here is looping through an individual tile,
+[01:02:46 -> 01:02:51] so a partial row and an individual tile. So i is less than tile dim.
+[01:02:51 -> 01:02:58] Okay, and then plus plus i. Okay.
+[01:02:58 -> 01:03:06] And now I'm looping through a specific tile. Let me actually show you a different illustration for this.
+[01:03:06 -> 01:03:10] So here now I have these tiles in shared memory and I want to loop through them.
+[01:03:10 -> 01:03:18] Okay, this thread is going to loop through this, this partial row and this partial row.
+[01:03:18 -> 01:03:23] Okay, and it wants to accumulate them.
+[01:03:23 -> 01:03:27] It wants to do a partial dot product.
+[01:03:27 -> 01:03:32] So that's why it goes from i equals zero to tile dim.
+[01:03:32 -> 01:03:36] Okay, and then I want to declare a variable to do the accumulation.
+[01:03:36 -> 01:03:40] So I'm going to declare it out here. I'm going to write a float.
+[01:03:40 -> 01:03:52] 0.0f. Okay, and now here I do the accumulation. So I do some plus equals, and this time I want to look elements from my tile.
+[01:03:52 -> 01:03:58] Okay, so what am I going to do? If I have this thread over here.
+[01:03:58 -> 01:04:07] With this thread index. I'm going to load from the tile at the same thread index.
+[01:04:07 -> 01:04:12] Okay, but I'm going to use, but it's going to be iterating through these elements.
+[01:04:12 -> 01:04:17] Okay, I'm going to load from A underscore S of index.
+[01:04:17 -> 01:04:21] The Y and then I.
+[01:04:21 -> 01:04:32] Okay, time and then this thread over here is going to have is going to have the same column index, which is going to be thread index dot X.
+[01:04:32 -> 01:04:35] But then I is going to be iterating through the rows.
+[01:04:35 -> 01:04:40] So here I'm going to be underscore S of I.
+[01:04:40 -> 01:04:47] And then thread index dot X.
+[01:04:47 -> 01:04:52] Okay, so I load these tiles from shared memory.
+[01:04:52 -> 01:04:57] And then I compute using the tiles in shared.
+[01:04:57 -> 01:05:02] Okay, what am I missing here? So after I load these tiles.
+[01:05:02 -> 01:05:06] I compute with them on the next iteration. What happens?
+[01:05:06 -> 01:05:13] I'm going to load the next tiles and then I'm going to compute with the next tiles and the next iteration. I'm going to load the next tiles and compute the next.
+[01:05:13 -> 01:05:18] Okay. And yes, you're absolutely right. What I'm missing here is synchronization.
+[01:05:18 -> 01:05:25] So here I have different threads. They're working together to load these tiles and they're working together to compute these tiles.
+[01:05:25 -> 01:05:34] But I end up in a situation where if I just run this code the way it is, I might have in a situation where these threads load the tiles.
+[01:05:34 -> 01:05:41] Okay, the threads finish loading the tiles and start computing before the other threads have loaded, finished loading the tiles.
+[01:05:41 -> 01:05:44] Okay, so maybe this thread.
+[01:05:44 -> 01:05:50] Okay, loads this element and this element and then starts computing.
+[01:05:50 -> 01:05:55] But this thread over here hasn't finished loading this element over here.
+[01:05:55 -> 01:06:03] So if the first thread over here reads this element over here before the second thread over here has finished loading it, we have a problem.
+[01:06:03 -> 01:06:08] So, when the threads load the data from the tiles, they have to wait for each other to finish.
+[01:06:08 -> 01:06:12] Before they proceed to compute.
+[01:06:12 -> 01:06:19] Okay, so what I need here is I need a sync.
+[01:06:19 -> 01:06:23] And then also let's compute.
+[01:06:23 -> 01:06:29] Okay, when these threads compute, if a thread finishes computing, so if this thread over here finishes computing.
+[01:06:29 -> 01:06:36] And it goes and starts loading the next element of A, but this thread over here at the end hasn't finished computing yet.
+[01:06:36 -> 01:06:42] It might load the wrong element of A. This first one finishes computing and loads a new value of A.
+[01:06:42 -> 01:06:47] But then this one hasn't used the old value of A.
+[01:06:48 -> 01:06:57] We have a problem. So the threads need to finish computing before they proceed to load the next time. So we also need a sync threads at the end over here.
+[01:06:57 -> 01:07:13] Okay. And then finally, once we're done with this, we've accumulated our sum across the tiles. We can go and we can store the result back to C.
+[01:07:13 -> 01:07:18] So here's C of row times M plus call equals sum.
+[01:07:18 -> 01:07:23] Okay, somebody's asked where does sum reside? Well, sum is here is going to be a register.
+[01:07:23 -> 01:07:27] It's probably going to go into register.
+[01:07:27 -> 01:07:30] All right, any questions? Is this clear to everyone?
+[01:07:30 -> 01:07:47] Professor, I'd like the tile to be as big as a swarm or warp. Could we have guaranteed synchronization without the synchronized function?
+[01:07:47 -> 01:07:57] Well, if we make the tile as big as a warp, we have several issues, which is our blocks are going to be small.
+[01:07:57 -> 01:08:12] Okay. But then the other thing is, no, there's no guarantee that tiles – there's no guarantee – you should not assume that threads in the warp are executed.
+[01:08:12 -> 01:08:22] Okay, even though they do, you should not assume it because the compiler might make an optimization where it reorders things and that assumption goes – and what you're assuming goes away.
+[01:08:22 -> 01:08:33] Always. Okay. No, don't assume that threads in a warp execute synchronously for correctness purposes, but you can assume it for optimization purposes.
+[01:08:35 -> 01:08:51] Okay. So, for example, if you don't put the sync threads over here and you don't put the sync threads over here, maybe the compiler detects that something is reused – you're storing something in shared memory and then you're loading it the same thing again.
+[01:08:51 -> 01:08:59] So it doesn't – so it just accesses an old variable or recomputes it rather than loading it again from shared memory or something like that.
+[01:08:59 -> 01:09:02] Okay. We should not – you should not make that assumption.
+[01:09:02 -> 01:09:10] All right. So let's – having written this shared tile code, let's – and see how it performs.
+[01:09:10 -> 01:09:26] I'm going to make and I'm going to run. Okay. And this is our new performance now, which is quite an improvement. So we're more than – we're a little more than two times faster because of shared memory time.
+[01:09:27 -> 01:09:36] Okay. And that is because we were able to reuse data and reduce the amount of global memory accesses that we are making.
+[01:09:36 -> 01:09:49] This is the code that we wrote. Now, a few things to be careful about when you are writing this kind of code is boundary conditions. We always come and look at boundary conditions.
+[01:09:49 -> 01:10:04] So one thing to be careful about with boundary conditions here, in the previous – in the previous application that we implemented, we simply deactivated all the threads that were not computing any output elements and we did the whole computation.
+[01:10:04 -> 01:10:17] That's what we did. But here we have to be careful. Why? Let's say we have a thread block that's responsible for these elements over here. And you'll notice because of boundary conditions, some of these output elements are out of bounds.
+[01:10:17 -> 01:10:23] So some of the threads in the thread block assigned to this output tile are not going to be computing any output elements.
+[01:10:25 -> 01:10:32] However, let's say this over here, this thread – this here represents the threads that are active during the computation.
+[01:10:34 -> 01:10:41] When I'm processing this output tile, okay, for the first tile, I'm going to load this input.
+[01:10:42 -> 01:10:49] Okay, so these are the threads that are going to be active – that need to be active when I'm loading the input tile.
+[01:10:50 -> 01:11:01] Okay, when I load this input tile over here, okay, these are the threads in the block that will be active when I'm loading the second input tile.
+[01:11:01 -> 01:11:11] And then when I compute the output element and store it, these are the threads that are going to be active when performing the dot products and storing the results.
+[01:11:12 -> 01:11:21] And what that means is that we have different boundary conditions for loading the input tile, loading the output tile, and computing and storing the results.
+[01:11:21 -> 01:11:30] So this is something you should be careful about. You can't just simply guard the whole kernel with if row is less than n and column is less than n.
+[01:11:31 -> 01:11:42] Okay, because if you do that, you might deactivate these threads, but these threads are going to be needed in loading input tile or loading from the other input tile, even though they're not needed in the actual computation.
+[01:11:42 -> 01:11:47] So sometimes some threads are just used for loading tiles, but they're not used for computation.
+[01:11:48 -> 01:11:58] Okay. And of course, another thing to be careful about is that you will have an assignment, and in the assignment, you'll have to deal with matrices with different dimensions.
+[01:11:58 -> 01:12:12] So I could have an m by k matrix and a k by n matrix that produce an m by n matrix. And these boundary conditions make things further complicated when you're implementing a tile matrix, matrix multiplication.
+[01:12:12 -> 01:12:29] Okay. Is that clear to everyone? Okay. Someone's asking, why do we need the sink?
+[01:12:29 -> 01:12:38] The reason we need the second sink is that some threads might finish the computation and proceed to load the next tile.
+[01:12:38 -> 01:12:51] But the other threads that are still doing the computation are accessing data from these tiles. So a thread might load the next tile before the other threads are done using the old values of the tile.
+[01:12:51 -> 01:13:04] Is that clear? Okay. Okay. So it turns out that we can actually also do time on the CPU.
+[01:13:04 -> 01:13:11] Okay. So tiling also works for the CPU. And now on the CPU, there's no scratchpad memory.
+[01:13:11 -> 01:13:20] However, tiling is frequently applied on the CPU and it relies on the caches. Why is it on the CPU? I can rely on the caches.
+[01:13:20 -> 01:13:38] There are less caches, less threads. Right. Exactly. So the cache is sufficiently reliable on the CPU, because there are fewer threads running. So there's, and the cache is larger.
+[01:13:38 -> 01:13:49] Okay. I'll quickly show you how to apply tiling on the CPU. By the way, I hate going over class time, but this is really interesting to me.
+[01:13:49 -> 01:13:56] You don't have to stick around if you don't want to do this. I think we're done with the important material for today. So you don't have to stick around.
+[01:13:56 -> 01:14:08] But if you're interested in seeing how to do tiling on the CPU, feel free to stick around and you can get to see what it looks like.
+[01:14:08 -> 01:14:25] Here, let me go and look at the CPU code. So remember, our CPU time was around in the order of 200 milliseconds. Okay. So now let me open the CPU code and let's see what tiling would look like on the CPU.
+[01:14:25 -> 01:14:43] So here, rather than looping through the row and the column and also being through the elements of the dot product, what we can do is we can loop over row tiles and then column tiles.
+[01:14:43 -> 01:15:06] Okay. So what we can see to you, sequentially following, we can sequentially go through our input tiles and then go through sequentially our output tiles.
+[01:15:06 -> 01:15:13] And then for every output tile input combination, we can sequentially go through our output elements.
+[01:15:14 -> 01:15:25] Okay. And for every one of these output elements, we can go through them and do the dot product. Okay. So the way that our CPU code is going to look like is as follows. We're going to do for every.
+[01:15:25 -> 01:15:30] Row tile for every column tile for every input tile.
+[01:15:30 -> 01:15:38] And then for every row and within the tile for every column within the tile, and then we're going to do the dot product.
+[01:15:39 -> 01:15:56] Let's see what that looks like. Okay. So I'm going to I'm going to take this. Actually, let me just get rid of this and start from scratch.
+[01:15:56 -> 01:16:11] So I want to loop over every row tile. Okay. So I'm going to do for unsigned and row tile is equal to zero.
+[01:16:11 -> 01:16:18] And how many row tiles do I have? Well, the number of tiles that I have is N over the tile div. So I'm going to do.
+[01:16:18 -> 01:16:21] Row tile is less than N over.
+[01:16:23 -> 01:16:27] And then plus plus row tile.
+[01:16:27 -> 01:16:35] All right. And then I'm going to do a loop over my column tiles. I'm going to do for.
+[01:16:35 -> 01:16:39] Unsigned and column tile is equal to zero.
+[01:16:39 -> 01:16:46] Column tile is less than N over tile.
+[01:16:46 -> 01:16:51] Plus plus column tile.
+[01:16:51 -> 01:17:04] Okay. And then the loop over my input tile. I'm going to do for unsigned and I tile is equal to zero. I tile is less than N over tile div.
+[01:17:04 -> 01:17:08] And then plus plus I tile.
+[01:17:08 -> 01:17:16] Okay. And then now what do I do? Now I'm going to go through the elements within the tile.
+[01:17:17 -> 01:17:24] So I'm going to do, so I have, I have tile div by tile div tile and I'm going to do the elements go through the elements within the tile. So I'm going to do for.
+[01:17:24 -> 01:17:32] Unsigned and my row is going to start at the beginning of the tile, which is going to be the row tile.
+[01:17:32 -> 01:17:37] Times the tile div. The row is equal to.
+[01:17:37 -> 01:17:40] Row tile times tile div.
+[01:17:40 -> 01:17:54] Okay, so zero. So if I am in the, if I'm in the, you know, if I'm in some row tile, if I'm in row tile zero, the row is going to be zero. If I'm in row tile one, the row is going to be the first row is going to be 32.
+[01:17:54 -> 01:17:59] And on row tile two, the first row is going to be 64, etc.
+[01:17:59 -> 01:18:05] And then I'm going to do row is less than row tile plus one.
+[01:18:05 -> 01:18:10] Times times tile div.
+[01:18:10 -> 01:18:16] Okay, I'm going to do plus plus row.
+[01:18:16 -> 01:18:20] And then I'm going to loop over the columns within the tiles. I do for.
+[01:18:20 -> 01:18:23] Unsigned and call is equal to zero.
+[01:18:23 -> 01:18:28] Sorry, call is equal to call tile times.
+[01:18:28 -> 01:18:32] Tile them call is less than.
+[01:18:32 -> 01:18:37] Call tile plus one.
+[01:18:37 -> 01:18:40] And then plus plus column tile.
+[01:18:40 -> 01:18:48] Okay, and then now here I'm going to do the product within the tile.
+[01:18:48 -> 01:18:52] Okay, so I'm going to declare some float.
+[01:18:52 -> 01:18:55] Is equal to zero point zero F.
+[01:18:55 -> 01:19:01] And then I'm going to loop over the elements within the tile. So the way I do that is as follows. I'm going to do for.
+[01:19:01 -> 01:19:07] Unsigned and I is equal to, and then similar to the row in the column.
+[01:19:07 -> 01:19:11] I is going to start at I tile.
+[01:19:11 -> 01:19:18] Times, and it's going to end at.
+[01:19:18 -> 01:19:24] I tile plus one.
+[01:19:24 -> 01:19:27] Times.
+[01:19:27 -> 01:19:33] They're going to increment.
+[01:19:33 -> 01:19:40] Okay, and now what I'm doing is I'm looking over the elements within the tile. So now this code is going to look just like the other code. I'm going to have some.
+[01:19:40 -> 01:19:43] Equals a row.
+[01:19:43 -> 01:19:48] Times and plus.
+[01:19:48 -> 01:19:52] Sorry, plus I.
+[01:19:52 -> 01:19:55] Okay, times B.
+[01:19:55 -> 01:19:59] I times and.
+[01:20:02 -> 01:20:08] Okay, and then finally, I need to write the result back.
+[01:20:08 -> 01:20:13] Okay, so I write C of row times and plus column.
+[01:20:13 -> 01:20:17] Is equal to some, but here I actually have to be careful.
+[01:20:17 -> 01:20:23] Because the, I can come back in later tiles.
+[01:20:23 -> 01:20:27] And write some, so here, so here, because I'm sequential.
+[01:20:27 -> 01:20:32] All the different elements within an output tile are sharing the same sum register.
+[01:20:32 -> 01:20:41] Okay, so what I need to do is for one that when I for the first time, I'm going to write out the sum, but for the remaining tiles, I need to accumulate this.
+[01:20:41 -> 01:20:45] I'm going to do.
+[01:20:45 -> 01:20:48] I was equal to zero.
+[01:20:48 -> 01:20:53] Then I write out the sum otherwise.
+[01:20:53 -> 01:20:57] For the later input tiles, I'm going to.
+[01:20:57 -> 01:21:06] Accumulate the sum. Okay, so this is what the tile CPU version looks like. And if you look at it.
+[01:21:06 -> 01:21:13] Closely, you can see that this this over here corresponds to the different thread blocks in the wide dimension.
+[01:21:13 -> 01:21:17] This this over here corresponds to the different thread blocks in the.
+[01:21:17 -> 01:21:20] X in the X dimension.
+[01:21:20 -> 01:21:23] This over here corresponds to the tile loop in our kernel.
+[01:21:24 -> 01:21:29] This over here corresponds to the different threads within our block in the wide dimension.
+[01:21:29 -> 01:21:37] This loop here corresponds to different threads within our block in the X dimension. And then this here corresponds to the inner loop in our kernel.
+[01:21:37 -> 01:21:42] You can see a nice correspondence between the sequential version and the parallel version.
+[01:21:42 -> 01:21:48] Okay, and if you compile this and we run it.
+[01:21:48 -> 01:21:58] It doesn't finish because we have a mistake somewhere.
+[01:21:58 -> 01:22:24] Let me see. Oh, there's my mistake.
+[01:22:24 -> 01:22:31] It should be plus plus column, not plus plus column.
+[01:22:31 -> 01:22:35] Okay, let's compile this and run it.
+[01:22:35 -> 01:22:41] And you'll see that the CPU time is also almost twice as fast because of tiling.
+[01:22:41 -> 01:22:45] The tiling is also beneficial on the CPU.
+[01:22:45 -> 01:22:50] Okay, so this is the code we wrote.
+[01:22:50 -> 01:22:55] Using shared memory also has an impact on occupants.
+[01:22:55 -> 01:23:05] So you'll notice that before just like just like, you know, we have a maximum amount of threads, maximum amount of blocks that we can have that we can have in the SM.
+[01:23:05 -> 01:23:10] We also have a maximum amount of registers and a maximum amount of shared memory that we can have.
+[01:23:10 -> 01:23:15] So the Volta we can have 60 threads in an SM and 96 kilobytes of shared memory.
+[01:23:15 -> 01:23:23] So if we use too many registers or too much shared memory, we could we could run out of registers or shared memory before we run out of threads.
+[01:23:23 -> 01:23:32] So this is another thing that one needs to be careful about when using shared memory. You can't use too much shared memory. You can't use too many registers.
+[01:23:32 -> 01:23:41] Okay. And then the final point is that we can dynamically allocate shared memory so far in our shared memory code over here.
+[01:23:41 -> 01:23:48] We've been kind of statically allocating the shared memory. So here the shared memory is always a 32 by 32 array.
+[01:23:48 -> 01:23:53] But in some cases you might want to dynamically allocate shared memory and CUDA allows you to do that.
+[01:23:53 -> 01:24:00] So shared memory can be dynamically allocated. And the way to do that is by declaring it like this, extern shared A underscore S.
+[01:24:00 -> 01:24:09] And then you can provide actually a third configuration to the kernel where you specify the size of the shared memory array that you want.
+[01:24:09 -> 01:24:19] Okay. And with that said, read more about what we covered today in Chapter 4 of the textbook. And that's all for today. And I will see you next time.
+[01:24:19 -> 01:24:21] Bye everyone.

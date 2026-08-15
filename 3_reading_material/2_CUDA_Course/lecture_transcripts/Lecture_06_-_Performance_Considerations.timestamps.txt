@@ -1,0 +1,671 @@
+Title: Lecture 06 - Performance Considerations
+Video ID: XzNQLfpO618
+Detected language: en
+------------------------------------------------------------
+
+[00:00:04 -> 00:00:09] Hello everyone and welcome to lecture six of GPU computing. Today we'll be talking about
+[00:00:09 -> 00:00:14] some more performance considerations. We've spoken about performance quite a bit in some
+[00:00:14 -> 00:00:21] of the past lectures and today we'll kind of speak about a few more performance considerations
+[00:00:22 -> 00:00:25] before we kind of proceed to start talking about other things in the course like
+[00:00:28 -> 00:00:33] different parallel patterns. So last time we looked at memory in the GPU architecture
+[00:00:33 -> 00:00:38] and the CUDA programming model and we saw how we can optimize memory accesses using shared memory
+[00:00:38 -> 00:00:43] tiling and we applied this to an example application. In particular it was matrix
+[00:00:43 -> 00:00:50] matrix multiplication. So we said that different processors have you know processor designers
+[00:00:51 -> 00:00:55] tell us about the performance of their processors using various metrics like the peak flop
+[00:00:55 -> 00:01:01] straight and the peak memory bandwidth, how many floating point operations per second a processor
+[00:01:01 -> 00:01:06] can do and how many bytes per second the memory of that processor can supply that processor.
+[00:01:07 -> 00:01:14] And we saw how these things varied across architectures and we also saw that applications
+[00:01:14 -> 00:01:20] can be compute bound or memory bound depending on whether they hit the peak
+[00:01:20 -> 00:01:25] flop straight or the peak memory bandwidth first. And we said that the peak flop straight
+[00:01:25 -> 00:01:30] and current processors tends to be pretty far ahead of the memory bandwidth
+[00:01:30 -> 00:01:38] and what that means is that on the Volta V100 for example I would need 15.6 operations per
+[00:01:38 -> 00:01:47] byte that's around 60 something operations per floating point, 60 something operations per
+[00:01:47 -> 00:01:53] floating point value that I load in order for me to reach a balance between the peak flop straight
+[00:01:53 -> 00:01:58] and the peak memory bandwidth. So anything that uses does fewer than that is expected
+[00:01:58 -> 00:02:03] to be compute memory bound versus if you're doing more more computations than that then you're
+[00:02:03 -> 00:02:10] expected to be compute bound. And we did this exercise for various various kernels. We looked
+[00:02:10 -> 00:02:17] at the matrix multiplication kernel and we saw how we wrote it before we were doing two
+[00:02:17 -> 00:02:21] floating point operations for every eight bytes that we load. So the two floating point
+[00:02:21 -> 00:02:26] operations are the addition and the multiplication and the eight bytes are the four bytes from A
+[00:02:26 -> 00:02:32] and the four bytes from B and that gave us a 0.25 ops per byte compute to global memory
+[00:02:32 -> 00:02:38] access ratio. But we saw how what we actually want to fully utilize the Volta V100
+[00:02:38 -> 00:02:46] is something like 15.6 operations per byte or 60 operations per operand
+[00:02:47 -> 00:02:54] and that is way higher than this. So we looked we considered how can we improve this
+[00:02:54 -> 00:03:00] computed memory access ratio and we said that one way we can do it is by using shared memory.
+[00:03:00 -> 00:03:05] So we saw that in the GPU architecture we have the global memory but we also have we have
+[00:03:05 -> 00:03:09] caches but the caches are managed by the hardware. However we have this shared memory
+[00:03:09 -> 00:03:14] that sits on the SM that's much faster than the global memory but it's much smaller of course
+[00:03:15 -> 00:03:21] and we said that for data that we access multiple times what we can do is we can have one thread
+[00:03:21 -> 00:03:25] loaded from the global memory to the shared memory and then have multiple threads access it
+[00:03:25 -> 00:03:30] from the shared memory. So we saw how in the CUDA programming model we have every thread has
+[00:03:30 -> 00:03:34] its own profit registers all threads in the grid have access to the same global memory but
+[00:03:34 -> 00:03:39] we also saw that threads in the same thread block have access to the shared memory and this
+[00:03:39 -> 00:03:44] allows threads in the same thread block to collaborate with each other in order for for
+[00:03:44 -> 00:03:49] them to minimize global memory accesses and reuse data from shared memory. We then looked
+[00:03:49 -> 00:03:53] at how we can apply this to matrix matrix multiplication we observed that in matrix
+[00:03:53 -> 00:03:58] matrix multiplication threads in the same thread block so for example the threads that
+[00:03:58 -> 00:04:06] process these four output elements all share the same all share the same input row from A
+[00:04:07 -> 00:04:11] and also we saw how threads in the same thread block for example these four threads that
+[00:04:11 -> 00:04:18] process these four values all share the load the same column. So rather than having these
+[00:04:18 -> 00:04:25] threads each one load the row from A or the column from B from global memory what we could
+[00:04:25 -> 00:04:31] do is we could have all the thread we could think of our A and B input matrices as also
+[00:04:31 -> 00:04:38] being tiled or divided into tiles and we can have these threads inside of this thread block
+[00:04:38 -> 00:04:44] each one be responsible for loading one of the elements of A and one of the elements of B so
+[00:04:44 -> 00:04:49] for example this thread would be responsible for loading this element in A and this element
+[00:04:49 -> 00:04:55] in B this thread over here would be responsible for loading this element from A and this element
+[00:04:55 -> 00:05:00] from B and then they would all load a tile to shared memory each thread is responsible
+[00:05:00 -> 00:05:06] for loading one element to that tile and then the threads would do would do the partial dot
+[00:05:06 -> 00:05:12] product from the tile so this thread would be responsible for loading this element and this
+[00:05:12 -> 00:05:18] element however it'll it'll take advantage of doing the dot product of all the elements in
+[00:05:18 -> 00:05:24] this row or partial row and all the elements in this partial column by accessing shared memory
+[00:05:24 -> 00:05:28] instead of global memory and then we can do the same thing for the next tile and the same
+[00:05:28 -> 00:05:34] thing from the for the next tile and and we implemented the code for this and we ran it and
+[00:05:34 -> 00:05:42] we showed how it gave us significantly better performance okay we then look at boundary
+[00:05:42 -> 00:05:46] conditions and we said that one thing we have to be careful about in boundary conditions is
+[00:05:46 -> 00:05:52] that when without tiling you know we just took out all the threads that that are outside
+[00:05:52 -> 00:05:56] of bounds of the output and and we only computed with the ones that are within bounds
+[00:05:56 -> 00:06:02] but here we have to be careful because over here the thread block that's processing this output tile
+[00:06:02 -> 00:06:07] right even it has some threads that are processing values that are within bounds and some threads
+[00:06:07 -> 00:06:12] that don't process any output values but these threads that don't process any other values may
+[00:06:12 -> 00:06:17] still participate in loading the input so for example if this corresponds to the threads
+[00:06:17 -> 00:06:22] inside of this thread block and we want to load this tile of A and this tile of B
+[00:06:23 -> 00:06:27] we'll notice that these threads are going to be active when we load this tile of A
+[00:06:28 -> 00:06:33] these threads are going to be active when we load these tiles of this tile of B
+[00:06:33 -> 00:06:38] but then only these threads are going to be active when we compute and when we store
+[00:06:39 -> 00:06:43] so this is something that we have to be careful about and this goes back to the rule
+[00:06:43 -> 00:06:49] of thumb that we said before which is that when you when you want to reason about
+[00:06:50 -> 00:06:56] boundary conditions every memory access needs to have a corresponding boundary condition so the
+[00:06:56 -> 00:07:01] memory access that loads the input tile of A has its own boundary condition the memory access
+[00:07:01 -> 00:07:05] that loads the input tile of B has its own boundary condition and the memory access that
+[00:07:05 -> 00:07:09] stores the output value of C is going to have its own boundary condition so this is the best
+[00:07:09 -> 00:07:15] way to reason about boundary condition and then finally we said that shared memory and also
+[00:07:15 -> 00:07:20] register usage impact occupancy because we only have a limited amount of shared memory per SM.
+[00:07:20 -> 00:07:27] So how much shared memory we request for our thread block will impact our occupancy. So we
+[00:07:27 -> 00:07:32] can't just say that we want all the shared memory in the world because there's a limited
+[00:07:32 -> 00:07:37] amount of shared memory on the SM. Okay, so this was a quick overview. I'll be covered last time.
+[00:07:37 -> 00:07:46] Any questions? Yes, Professor. Yes. Just one question. So if we're limited by memory,
+[00:07:46 -> 00:07:52] why don't they provide GPUs with less cores and sell it for cheaper?
+[00:07:55 -> 00:08:01] Because not all your applications are limited by memory. Some of them are not limited by memory.
+[00:08:02 -> 00:08:07] Okay, I see. Okay, so GPU is designed for many kinds of applications. Some of them are
+[00:08:07 -> 00:08:14] memory-bound, some of them are not. Now, if you have an application that's extremely limited by
+[00:08:14 -> 00:08:21] memory, then you might want to consider other types of processors. So there's research on
+[00:08:21 -> 00:08:28] processors that do things like processing and memory, and that's designed for memory-bound
+[00:08:28 -> 00:08:34] applications. But this is very kind of research level stuff. It's not something that's in wide
+[00:08:34 -> 00:08:42] production. Okay, but GPUs are, they're good at applications that have memory bottleneck because
+[00:08:42 -> 00:08:48] the HBM in the GPU gives you high memory bandwidth. But of course, the more compute-bound
+[00:08:48 -> 00:08:55] an application is, the better you'll find the GPU is at accelerating. Professor, what happens
+[00:08:55 -> 00:09:03] if we need more shared memory than we have and then we run the code? Can it detect it?
+[00:09:03 -> 00:09:10] You mean if you request? Yeah, like maybe I need 100 kilobytes and there's only 96. Does it give
+[00:09:10 -> 00:09:16] me an error or something? So if you request, so there's two ways to request shared memory like
+[00:09:16 -> 00:09:20] we saw last time. You can statically allocate the shared memory. So you specify the size of
+[00:09:20 -> 00:09:25] the array using a compile time constant, or you can dynamically allocate it by configuring
+[00:09:25 -> 00:09:29] the kernel. If you statically allocate more shared memory than the SM has, the code will
+[00:09:29 -> 00:09:36] fail to compile. If you are dynamically allocating memory and you dynamically try to allocate more
+[00:09:36 -> 00:09:44] shared memory than the SM has, then in this case the kernel will fail to launch. Professor,
+[00:09:44 -> 00:09:51] continuing on that, for example, if my application crashes, I have a bug or a problem
+[00:09:51 -> 00:09:59] in the code. Does the memory get, is there a memory leak or no?
+[00:10:01 -> 00:10:05] You can think of it just like the CPU memory. So if an application crashes,
+[00:10:06 -> 00:10:12] the operating system kind of deallocates all the memory that was allocated by that application.
+[00:10:12 -> 00:10:17] Similarly, if a process crashes then all the GPU memory that it had allocated will be
+[00:10:17 -> 00:10:22] deallocated. So you don't have to worry about memory leaks in case of a crash. Obviously you
+[00:10:22 -> 00:10:27] do have to worry about memory leaks if you don't have a crash but you allocate and forget
+[00:10:27 -> 00:10:31] to deallocate and are still running the application. But of course if memory leaks
+[00:10:31 -> 00:10:35] and then the application stops running, then everything it had allocated will be free.
+[00:10:38 -> 00:10:50] Okay, you're welcome. All right, so if there are no further questions, then today we will
+[00:10:51 -> 00:10:58] look a little bit about the DRAM architecture, how the DRAM is organized. And after reviewing
+[00:10:58 -> 00:11:02] some DRAM architecture, it's going to motivate an optimization that we're going to talk about.
+[00:11:02 -> 00:11:07] And we'll also talk about another performance optimization that comes up frequently. Okay,
+[00:11:07 -> 00:11:14] and performance optimizations in general. So performance optimizations. We've seen several
+[00:11:14 -> 00:11:19] performance optimizations so far. We've looked at the importance of tuning our resource
+[00:11:19 -> 00:11:23] resource usage to maximize occupancy. So this is one important optimization.
+[00:11:24 -> 00:11:29] We've looked at the importance of minimizing control divergence to increase our SIMD
+[00:11:29 -> 00:11:36] efficiency. We actually didn't do an example of this. We just talked about the, you know,
+[00:11:36 -> 00:11:41] we observed that control divergence exists and we observed that it is a source of inefficiency
+[00:11:41 -> 00:11:44] and we observed that it is important to minimize it. But we didn't do an example of
+[00:11:44 -> 00:11:50] how to do so. And we will do examples, multiple examples later on in the course on minimizing
+[00:11:50 -> 00:11:57] control divergence. But it is an optimization that we have alluded to. We also saw shared
+[00:11:57 -> 00:12:02] memory tiling to increase data reuse. So whenever we have data that is reused by
+[00:12:02 -> 00:12:06] multiple threads, we can use shared memory to load it once and then have all the threads
+[00:12:06 -> 00:12:11] access it from shared memory. We're going to talk about two more optimizations today.
+[00:12:11 -> 00:12:15] The first one is memory coalescing, which we have actually been doing,
+[00:12:16 -> 00:12:20] but we just didn't talk about it. And then the second one is thread coarsening,
+[00:12:20 -> 00:12:25] which we will do an example of today. So before, I'll start by talking about
+[00:12:25 -> 00:12:28] memory coalescing. But before that, I would like to talk a little bit about the DRAM
+[00:12:28 -> 00:12:33] architecture. A DRAM cell, for those of you who've taken a course in computer
+[00:12:33 -> 00:12:38] architecture, you should be familiar with this, but I will review it. A DRAM cell,
+[00:12:38 -> 00:12:44] you can logically think of it as some capacitance that stores a charge and some
+[00:12:44 -> 00:12:51] three state device where when you enable it, the capacitor discharges in order for you to read
+[00:12:51 -> 00:12:55] that value. And so if the value is one, it'll discharge and you'll detect that there's a
+[00:12:55 -> 00:12:59] discharge. If the value is zero, it won't discharge and you'll detect that there's no
+[00:12:59 -> 00:13:07] discharge, so you will know that it's a zero. Okay, so a DRAM cell consists of capacitance
+[00:13:07 -> 00:13:13] that stores charge and a three state device that allows the data to be read and written.
+[00:13:15 -> 00:13:25] A DRAM array looks like this. You have multiple DRAM cells connected to a column wire.
+[00:13:26 -> 00:13:29] And at any point in time, because all of these are connected to a wire,
+[00:13:29 -> 00:13:32] at any point in time, you will only read one of these cells.
+[00:13:35 -> 00:13:44] All right, and a DRAM bank is going to consist of multiple of these vertical wires connected,
+[00:13:44 -> 00:13:49] you know, these DRAM cells all connected to a wire. So you're going to have multiple of these.
+[00:13:50 -> 00:13:57] So a DRAM bank consists of this 2D array of DRAM cells. And at any point in time,
+[00:13:57 -> 00:14:03] what we're going to do is we're going to activate one row in this DRAM cell,
+[00:14:03 -> 00:14:07] in this DRAM array in order to read that row. So for example,
+[00:14:09 -> 00:14:15] we have these lines that activate our three state buffers. If I set this line to one and
+[00:14:15 -> 00:14:22] all the others to zero, what will happen is these three state devices will, they open,
+[00:14:22 -> 00:14:29] meaning you close the circuit, and then these capacitors will discharge and we read these rows.
+[00:14:31 -> 00:14:37] If I activate this at this row to one and all the others to zero, then these three capacitors
+[00:14:37 -> 00:14:44] or this row of capacitors will discharge, and we are going to read one bit from each column.
+[00:14:45 -> 00:14:49] So this is how DRAM works. Now, those of you who know, know that when we read,
+[00:14:49 -> 00:14:54] we destroy the value, so we have to write it back, and this makes DRAM slow. And yes,
+[00:14:54 -> 00:15:00] this is all part of how DRAM works. But the key thing is that we read one row at a time,
+[00:15:00 -> 00:15:03] and this read involves discharging these capacitors.
+[00:15:05 -> 00:15:12] So in general, if the DRAM bank is architected as follows, we provide a row address to a row
+[00:15:12 -> 00:15:18] decoder. What does the row decoder do? The decoder takes this address, determines which row
+[00:15:18 -> 00:15:24] we want, and then sets one of these outputs to one and the others to zero, and then we pass
+[00:15:24 -> 00:15:30] this decoded signal to the DRAM bank. And in the DRAM bank, what happens is if we activate
+[00:15:30 -> 00:15:35] this row, all the cells in this row are going to discharge, and what we do is they will,
+[00:15:35 -> 00:15:41] the values will come out over here. These values will feed it to a sense amplifier.
+[00:15:41 -> 00:15:47] The sense amplifier are these circuits that will, circuit components that will detect the
+[00:15:47 -> 00:15:52] change in charge in the capacitors in order for them to figure out whether the capacitor has a
+[00:15:52 -> 00:15:59] one or a zero. And then after detecting this change in charge, we store it to a column
+[00:15:59 -> 00:16:06] latch. Now, a column latch is, it holds onto the value, so when you read it,
+[00:16:06 -> 00:16:10] it doesn't get destroyed. So what happens is that this column latch will then be used to
+[00:16:10 -> 00:16:15] write back the value that we read, because reading from a capacitor destroys the value.
+[00:16:15 -> 00:16:20] And then this column latch will hold onto the value that we read from the DRAM row.
+[00:16:23 -> 00:16:30] But the row is large, right? So the row is larger than a typical size of your request.
+[00:16:30 -> 00:16:35] So what happens is the address also has another part, which is the column address.
+[00:16:35 -> 00:16:39] So your whole memory address is divided into parts. Part of it is the row address.
+[00:16:39 -> 00:16:44] Another part is the column address. The column address will be passed to a multiplexer to select
+[00:16:46 -> 00:16:55] what part of this row my address corresponds to. And then this multiplexer will select
+[00:16:55 -> 00:17:01] that part and provide it as the data that I am requesting. Now, this entire row that I read,
+[00:17:03 -> 00:17:07] I don't pass the entire row, I just pass part of it. But this entire row that I read is
+[00:17:07 -> 00:17:15] called a burst. So this is a DRAM burst. Now, what part of this whole process is the slowest part?
+[00:17:25 -> 00:17:27] The DRAM array, because it's huge.
+[00:17:28 -> 00:17:34] The DRAM array, the sense amplifiers, these take time. The MUX is actually not that fast,
+[00:17:34 -> 00:17:42] not that slow. So relatively, this stage of reading from the DRAM array and
+[00:17:42 -> 00:17:46] going through the sense amplifiers and then storing in the column latch,
+[00:17:46 -> 00:17:50] and then writing back the value that we destroyed, this is the slow part.
+[00:17:51 -> 00:17:57] The fast part is using the MUX to select what part of the row we want.
+[00:17:58 -> 00:18:03] So this is the slow part. The faster part is now that we have the whole burst,
+[00:18:03 -> 00:18:05] selecting what part of the burst we care about.
+[00:18:06 -> 00:18:14] Professor, in 255, I remember you said something about the decoder, we can't make it
+[00:18:14 -> 00:18:19] big enough because it becomes too slow or something like that.
+[00:18:20 -> 00:18:25] Right, exactly. And that is why this is just a DRAM bank, it's not my entire DRAM.
+[00:18:27 -> 00:18:32] This DRAM array is not going to have four gigabytes worth of room.
+[00:18:33 -> 00:18:38] Okay, it's going to have a small amount, and I'm going to have multiple DRAM banks,
+[00:18:38 -> 00:18:44] and I'll talk about that later on. Okay, so let's do an example just to make this clear.
+[00:18:44 -> 00:18:50] So if I have this address over here, I want to read the value at address 010.
+[00:18:51 -> 00:18:56] And I have this DRAM array that is four by four.
+[00:18:56 -> 00:19:00] Well, what happens in this case is I'm going to divide my address into
+[00:19:00 -> 00:19:06] a row address and a column address. Okay, so let's say I use 01 as my row address.
+[00:19:07 -> 00:19:12] Okay, 01 goes through the decoder. Each one of these four inputs corresponds to one row
+[00:19:12 -> 00:19:18] address, so 00011011. Oops, maybe this should have been 10. Oh, well.
+[00:19:20 -> 00:19:26] Or maybe we're going from down, so 00011011. So the point is that I use this address to
+[00:19:26 -> 00:19:32] activate one row, and then I read this row. I read the entire burst into my mux.
+[00:19:33 -> 00:19:39] Okay, and then now I want to select which part of this entire burst I want, and for that I'm
+[00:19:39 -> 00:19:50] going to use this 0 as my column address. Okay, and then this 0 will select this part
+[00:19:50 -> 00:19:57] of the data that I read and provide it to my processor. Okay, so I'm going to use the other
+[00:19:57 -> 00:20:06] part of the address to select columns within a row. Now, if my next access is something like
+[00:20:06 -> 00:20:13] 100, then I have to do this entire process again. I have to go back, pass the 10,
+[00:20:13 -> 00:20:18] decode it, read the corresponding row, and then use the multiplexer.
+[00:20:18 -> 00:20:25] But if my next address that I read happened to be 011, do I have to go back and read
+[00:20:25 -> 00:20:28] the whole decoder, go through the decoder and the DRM array again?
+[00:20:34 -> 00:20:41] No, what do I have to do in this case? Go to the multiplexer.
+[00:20:41 -> 00:20:46] Right, I just have to change, the only thing that changes is what the multiplexer is doing.
+[00:20:46 -> 00:20:52] So if my next address is 011, right, so if the other access comes from the same burst,
+[00:20:52 -> 00:20:57] then there's no need to read the row again from DRM. I can just change the multiplexer.
+[00:20:57 -> 00:21:01] And this is why this idea of DRM bursts is important.
+[00:21:03 -> 00:21:09] In general, accessing data in different bursts means that we need to access the array again.
+[00:21:09 -> 00:21:13] So in terms of time, and accessing the array is the part that takes long,
+[00:21:13 -> 00:21:18] the multiplexer doesn't take much time. So if I have an accessing data in different bursts,
+[00:21:18 -> 00:21:21] I have all this time I need to wait to access the array.
+[00:21:21 -> 00:21:25] And then this green part is the multiplexer part to access the data from within the burst.
+[00:21:25 -> 00:21:29] And then if I go and access data from a different burst, I have to wait again until
+[00:21:29 -> 00:21:32] I read the entire array. And then I get my data from my burst.
+[00:21:33 -> 00:21:39] However, if I access data in the same burst, then in this case, I don't need to access the
+[00:21:39 -> 00:21:45] array again. I just need to change the multiplexer. So in this case, my timeline looks
+[00:21:45 -> 00:21:52] like this. I read the entire row, I read the entire burst, and then I provide the data from
+[00:21:52 -> 00:21:58] the burst. And then if the next access comes from the same burst, I just provide that same access
+[00:21:58 -> 00:22:02] without me having to re-go through the DRM again.
+[00:22:03 -> 00:22:07] But don't you have the same clock time? Sorry?
+[00:22:08 -> 00:22:13] Doesn't it depend on the clock? So every time you read, it's a clock tick.
+[00:22:13 -> 00:22:19] I mean, of course, there is some notion of clocks there, clocks involved here. I don't
+[00:22:19 -> 00:22:26] want to get into that. But the time that it takes for me to change the MUX to get
+[00:22:26 -> 00:22:32] another part of the burst is much less than the time, or there's much fewer clock
+[00:22:32 -> 00:22:36] cycles to do that than the clock cycles I need to wait in order for me to do this whole
+[00:22:36 -> 00:22:39] sense amplification and this whole read from the DRM.
+[00:22:39 -> 00:22:41] Okay, thank you.
+[00:22:41 -> 00:22:47] Okay, so the moral of the story is accessing data in the same burst is faster than
+[00:22:47 -> 00:22:54] accessing data in different bursts. Okay, and what this does is it brings me to the
+[00:22:54 -> 00:23:03] point about memory coalescing. So when the same warp access consecutive memory
+[00:23:03 -> 00:23:08] locations in the same burst, okay, so if I have threads that are in the same
+[00:23:08 -> 00:23:14] warp, reading consecutive data in an array, that data will likely be in the same DRAM
+[00:23:14 -> 00:23:21] burst. These accesses can be combined and served by one DRAM burst. So that means
+[00:23:21 -> 00:23:26] that one DRAM transaction is needed. Right? And this is known as memory
+[00:23:26 -> 00:23:31] coalescing. I coalesce the memory accesses from the different threads into one
+[00:23:31 -> 00:23:39] memory access. However, if more access locations that are not in the same burst,
+[00:23:40 -> 00:23:44] then these accesses cannot be combined. And what that means is I need to make
+[00:23:44 -> 00:23:52] multiple transactions. So it's going to take long and remember that when threads are in
+[00:23:52 -> 00:23:57] the same warp, I need to wait for all they all execute together. So if threads in the
+[00:23:57 -> 00:24:03] same warp all issue a load instruction, right, they try to load from memory, I need to wait
+[00:24:03 -> 00:24:08] for all the load instructions to complete before I can execute that warp because all
+[00:24:08 -> 00:24:13] the threads need to have their data ready. So if all of those loads be touching the same
+[00:24:14 -> 00:24:20] DRAM burst, we coalesce them and that's one memory access. But if the threads in the same
+[00:24:20 -> 00:24:25] warp are accessing different locations in DRAM, then I need to wait for all those
+[00:24:25 -> 00:24:32] loads to be served by the DRAM before the warp can continue execute. Okay. And what happens here
+[00:24:32 -> 00:24:37] is this is called, sometimes people call this memory divergence. So control divergence is when
+[00:24:37 -> 00:24:42] threads in the same warp divergent control paths, each one of them wants to execute one
+[00:24:42 -> 00:24:48] branch of an if statement or a different number of loop iterations. Memory divergence is when
+[00:24:48 -> 00:24:54] threads in the same warp access data in different DRAM bursts. Each one of them is going
+[00:24:55 -> 00:25:02] to have to issue a separate load. They cannot combine their loads. Okay. And we've actually
+[00:25:02 -> 00:25:08] been adhering to memory coalescing quite well so far just because it was so easy to do that
+[00:25:08 -> 00:25:12] in the applications that we've looked at so far. So let's go back and see the code that
+[00:25:12 -> 00:25:19] we wrote. So here in our vector addition code, in our vector addition code, when we look at
+[00:25:19 -> 00:25:25] what threads in the same warp are accessing, are threads in the same warp likely to access
+[00:25:26 -> 00:25:38] data in the same DRAM burst? No. Why not? Because it's different row each time.
+[00:25:42 -> 00:25:48] Okay. Well, think about it. So if here I have thread zero and thread one and thread two are
+[00:25:48 -> 00:25:54] accessing the array X, they're going to issue load instructions to access the array X.
+[00:25:55 -> 00:26:00] Well, thread zero is going to access X of zero, and thread one is going to access X of one,
+[00:26:00 -> 00:26:05] and thread two is going to access X of two. Right? Are X of zero and X of one and X of two
+[00:26:05 -> 00:26:16] likely to be in the same DRAM burst? Yes. But aren't the cells arranged by eight bits?
+[00:26:17 -> 00:26:22] Oh, no, no, no. Okay. That's a good point. I forgot to mention this. So the typical size
+[00:26:22 -> 00:26:28] of a DRAM, of a row in a DRAM bank is not going to be eight bits. It's going to be something
+[00:26:28 -> 00:26:33] pretty large. Okay, okay. So it's going to have many, it's going to have many, many bytes.
+[00:26:36 -> 00:26:42] Okay. So that's a good point. So having cleared that up, it's obvious that in this
+[00:26:42 -> 00:26:47] case, I have memory coalescing because threads zero to 31 are going to access elements
+[00:26:47 -> 00:26:56] zero to 31 in X of I. So these elements zero to 31 are all nearby each other in memory.
+[00:26:56 -> 00:27:01] So they're likely going to be within the same DRAM burst, which means that I can coalesce
+[00:27:01 -> 00:27:07] these accesses. Okay. Similarly with matrix-matrix multiplication, right? What about matrix-matrix
+[00:27:07 -> 00:27:19] multiplication? Are my accesses here coalesced? Be careful here. One thing I should clarify
+[00:27:19 -> 00:27:26] is that when I have a two-dimensional thread block, what I do is I put all the threads of the X
+[00:27:26 -> 00:27:33] dimension together in a warp before going down the Y dimension. Okay. So here, what determines
+[00:27:33 -> 00:27:39] if something is the consecutive threads of the warp are going to be the threads with consecutive
+[00:27:39 -> 00:27:47] thread index dot X values. Okay. So threads with consecutive thread index dot X values are
+[00:27:47 -> 00:27:53] going to be in the same warp. In other words, threads with the same row index and consecutive
+[00:27:53 -> 00:27:59] column index values are going to be in the same warp. So here, if I look at the access to B,
+[00:27:59 -> 00:28:03] right, it's obviously going to be coalesced because all threads have the same value of I
+[00:28:04 -> 00:28:09] and all threads have the same value of N. Okay. And threads in the same warp have
+[00:28:09 -> 00:28:14] consecutive values of co. So then threads in the same warp will access consecutive values of
+[00:28:14 -> 00:28:21] B. So obviously, the access to B is going to be coalesced. Okay. What about the access of A?
+[00:28:23 -> 00:28:30] It's the same. It's the same for all threads in the warp. Exactly. Assuming that all my
+[00:28:30 -> 00:28:35] threads have the same value of row. So if I have a 32 by 32 thread block, all threads will
+[00:28:35 -> 00:28:39] have the same row value. So here, all threads in the warp have the same row, the same N,
+[00:28:39 -> 00:28:45] and the same I. So they're all accessing the same exact memory location. So I don't have to worry
+[00:28:45 -> 00:28:52] there either. Okay. So just here, I was noting that warp contains consecutive threads in the
+[00:28:52 -> 00:28:59] X dimension. So see that accesses to A and B are coalesced because threads 0 to 31 access
+[00:29:02 -> 00:29:08] the same element of A and then consecutive elements of B. What about tile matrix,
+[00:29:08 -> 00:29:21] matrix multiplication? Where my accesses here coalesce? To a lesser extent. Why is it to a
+[00:29:21 -> 00:29:32] lesser extent? Because we load, like we use shared memory, which is good. But in general,
+[00:29:32 -> 00:29:37] when we load, we're loading only tiles maybe. And so- Right. So we care about going to global
+[00:29:37 -> 00:29:43] memory. So here, when I'm loading from global memory, our threads in a warp accessing
+[00:29:43 -> 00:29:48] consecutive elements. Well, they all have the same value for row, same value for N, same value
+[00:29:48 -> 00:29:55] for tile. Tile div is a constant. So the threads in the same warp are going to have consecutive
+[00:29:55 -> 00:30:02] thread index dot X values. So they will also access consecutive elements. Okay. Same thing
+[00:30:02 -> 00:30:09] here. Call is in terms of thread index dot X. So here, these will also be coalesced. So
+[00:30:09 -> 00:30:17] yes, actually, it turns out that these are both going to be coalesced. Okay. So access to A and B
+[00:30:17 -> 00:30:25] are coalesced. Now, so far, all the examples we've had our accesses have been fairly coalesced.
+[00:30:26 -> 00:30:34] But I wanted to talk about this today just to clarify what was going on underneath. If our
+[00:30:34 -> 00:30:40] accesses were not coalesced, we would have seen a significant blow to our performance.
+[00:30:40 -> 00:30:46] And later on, we will look at examples where we will have an application where we start off with
+[00:30:46 -> 00:30:50] something that's not coalesced and see how we can change it in order to make sure that our
+[00:30:50 -> 00:30:57] accesses are coalesced. Can you repeat why elements like threads in this
+[00:31:00 -> 00:31:09] access are coalesced for the row? Because thread index, if we have thread index dot Y,
+[00:31:09 -> 00:31:16] we're going to access different rows of the matrix. So doesn't it depend on the
+[00:31:16 -> 00:31:23] row size of the DRAM? Can you say that again? You mean threads that have the same row but
+[00:31:23 -> 00:31:33] different column values? Why are they coalesced? Yes. Okay. Because the way that warps are
+[00:31:33 -> 00:31:42] organized is that you have threads with the same Y value, but consecutive X values will go into the
+[00:31:42 -> 00:31:51] same warp. So for example, the thread with Y equals zero and X equals zero is going to be
+[00:31:51 -> 00:31:55] in the same warp as the thread with Y equals zero and X equals one, and then Y equals zero
+[00:31:55 -> 00:32:02] and X equals two, Y equals zero and X equals three. Once I have hit the block dim dot X
+[00:32:02 -> 00:32:09] of the thread block, that's when I start taking threads from the next row of the block.
+[00:32:09 -> 00:32:14] So thread index dot Y equals one to the index dot X equals zero and putting them in my warp.
+[00:32:14 -> 00:32:22] Now if I have a 32 by 32 thread block, then in that 32 by 32 thread block,
+[00:32:23 -> 00:32:28] the threads with thread index dot Y equals zero and thread index dot X going from zero
+[00:32:28 -> 00:32:33] to 31, those are going to be the first warp. And then the threads with thread index dot Y
+[00:32:33 -> 00:32:38] equals one and thread index dot X is going from zero to 31. Those are going to be the second warp,
+[00:32:38 -> 00:32:46] et cetera. Okay. Got it. Thank you. So this covers the topic of memory coalescing.
+[00:32:48 -> 00:32:53] Another thing I would like to talk about is the fact that we have multiple DRAM banks. So
+[00:32:53 -> 00:32:59] usually when we organize DRAM, we don't just have one big DRAM array for multiple reasons.
+[00:32:59 -> 00:33:05] The first reason is that manufacturing a huge DRAM array is not feasible. But then another
+[00:33:05 -> 00:33:11] reason is that when we have multiple DRAM banks, this allows us to have a parallelism
+[00:33:11 -> 00:33:18] when we access our DRAM. Let me show you what I mean by that. So when DRAM is organized
+[00:33:18 -> 00:33:26] into multiple banks and all these banks kind of feed data on the same bus. So when I read from
+[00:33:26 -> 00:33:31] DRAM, I usually read from one of these DRAM arrays at a time or maybe multiple depending on
+[00:33:31 -> 00:33:38] my DRAM architecture. But the idea is that when I have multiple DRAM arrays, one DRAM
+[00:33:38 -> 00:33:44] array may be serving me while another DRAM array is in the middle of finding an operation,
+[00:33:44 -> 00:33:50] finding a data that we requested from. And having multiple DRAM arrays is useful
+[00:33:51 -> 00:34:01] because it allows us to do latency hiding of our memory accesses. So multiple DRAM banks allow
+[00:34:01 -> 00:34:06] us to do latency hiding. And let's see what I mean by that. So if I have one DRAM bank,
+[00:34:06 -> 00:34:11] then even if I fully utilize my burst, there's always this time that I'm waiting for my
+[00:34:11 -> 00:34:17] burst to be read from the DRAM array. And then I have the time that I spend accessing data in
+[00:34:17 -> 00:34:22] that burst. But once I've used all the data in my burst, I still have to go and read the next
+[00:34:23 -> 00:34:29] data in my DRAM array before I can access that data from the latch. So even if I fully
+[00:34:29 -> 00:34:36] utilize my DRAM burst, I still have this time that I'm wasting waiting for my DRAM array
+[00:34:36 -> 00:34:46] to read the data. Now, if I have multiple DRAM banks, then what I can do is I have this time
+[00:34:46 -> 00:34:53] that I waited for my DRAM burst to come. But then when I finish reading my DRAM burst,
+[00:34:53 -> 00:35:00] I still have these other DRAM arrays being read in the other banks. They can think of
+[00:35:00 -> 00:35:05] each of these horizontal lines as the timeline for one of the banks. And then when I'm done
+[00:35:05 -> 00:35:11] reading the burst from this bank, another bank might be ready. So in this case, now I can read
+[00:35:11 -> 00:35:17] the data from the second bank. And then by the time I finish reading from the second bank,
+[00:35:17 -> 00:35:23] the burst in the third bank is ready. So I can go and I can read the data from the third bank.
+[00:35:23 -> 00:35:27] And then the time that I'm reading the bursts from the second bank and the third bank
+[00:35:27 -> 00:35:32] and serving them to the chip, the first bank is going and it's doing another DRAM array read.
+[00:35:32 -> 00:35:38] And by the time I've read from my other DRAM banks, now the burst in my first DRAM bank has
+[00:35:38 -> 00:35:46] arrived. So having multiple DRAM banks available to me enables me to hide the latency of these
+[00:35:46 -> 00:35:51] DRAM banks because as I'm reading the burst from one bank, the other banks are going and
+[00:35:51 -> 00:36:01] they are reading other data. So here we're hiding the latency of memory by having many
+[00:36:01 -> 00:36:08] DRAM banks to always ensure the more DRAM banks we have, the higher chance that
+[00:36:08 -> 00:36:13] one of these DRAM banks has finished its memory access and is ready to serve the burst.
+[00:36:15 -> 00:36:20] However, in order for me to effectively utilize these DRAM banks, what do I need to have?
+[00:36:23 -> 00:36:29] If I want to have many memory banks reading data at the same time in order for me to
+[00:36:30 -> 00:36:37] hide their latencies, I need to give them a lot of memory accesses to serve it.
+[00:36:38 -> 00:36:43] And for me to give them many memory accesses, what do I need? I need many threads running
+[00:36:43 -> 00:36:51] simultaneously and requesting data simultaneously so that I can keep my DRAM banks busy.
+[00:36:53 -> 00:36:54] And what does this remind you of?
+[00:36:57 -> 00:36:58] Scheduling warps.
+[00:37:00 -> 00:37:02] Warps. What about warps?
+[00:37:03 -> 00:37:05] Control divergence or no?
+[00:37:07 -> 00:37:09] It wasn't divergence, it was another thing about warps.
+[00:37:15 -> 00:37:18] We move warps in and out.
+[00:37:19 -> 00:37:26] Right, exactly. So we like to have many more warps running on our SM than
+[00:37:27 -> 00:37:34] our scheduled SM can simultaneously execute so that when one of them is waiting, the other
+[00:37:34 -> 00:37:40] one is ready to service. Similarly, we want to have many more memory accesses that we can
+[00:37:40 -> 00:37:45] simultaneously read from our DRAM so that while we're reading one access from one of the banks
+[00:37:46 -> 00:37:51] or while we're waiting for one access to complete from one of the banks and another
+[00:37:51 -> 00:37:58] one is completing in the bank. And the way we achieve this is by using the same technique,
+[00:37:58 -> 00:38:05] having high occupancy. So by having high occupancy in our SMs, this both helps us hide
+[00:38:05 -> 00:38:11] the latency of the pipeline latency in the core, but these many threads having high occupancy
+[00:38:11 -> 00:38:16] also ensures that we have many memory accesses in order for us to be able to hide the memory
+[00:38:16 -> 00:38:24] access latency when accessing DRAM. Is this clear? Any questions?
+[00:38:31 -> 00:38:37] So one optimization we spoke about today is memory coalescing and ensuring that our memory
+[00:38:37 -> 00:38:44] accesses are coalesced. And then we also reviewed this idea of occupancy, but this time
+[00:38:44 -> 00:38:49] applied, we showed how having high occupancy not only helps us hide latency in our pipeline,
+[00:38:49 -> 00:38:54] but also hide latency when accessing memory. Then for the second half of the lecture,
+[00:38:54 -> 00:39:00] what I'd like to talk about is another optimization, and that is thread coarsening.
+[00:39:00 -> 00:39:05] And for that, I want to start to introduce this idea of thread granularity.
+[00:39:06 -> 00:39:12] So so far, the parallelization approaches that we've been using to parallelize these
+[00:39:12 -> 00:39:18] different applications, we've been following the strategy of making threads as fine grained
+[00:39:18 -> 00:39:22] as possible. What do I mean by threads being as fine grained as possible?
+[00:39:22 -> 00:39:28] I mean that we're assigning threads to the smallest possible unit of parallelism.
+[00:39:29 -> 00:39:35] So for example, when I did vector addition, I had every thread responsible for
+[00:39:35 -> 00:39:43] one vector element, not two. The smallest possible unit of parallelism is one vector element,
+[00:39:43 -> 00:39:47] adding one vector element to one vector element and producing one vector element.
+[00:39:47 -> 00:39:52] So we've had one thread do that. Similarly, when we did the RGB to gray,
+[00:39:52 -> 00:39:58] we assigned a thread to every output pixel. And similarly with matrix matrix multiplication,
+[00:39:58 -> 00:40:02] we assigned a thread for every element in the output matrix.
+[00:40:03 -> 00:40:06] So we've been making threads as fine-grained as possible.
+[00:40:06 -> 00:40:12] So this is what we mean by the granularity of a thread. How small or how large the task
+[00:40:12 -> 00:40:17] that we gave it is with respect to what are all the tasks that can be parallelized.
+[00:40:17 -> 00:40:21] Now, what is the advantage of making threads as fine-grained as possible?
+[00:40:21 -> 00:40:24] What is the advantage of making threads the smallest possible unit of parallelism?
+[00:40:27 -> 00:40:29] We take advantage of all the cores we have.
+[00:40:29 -> 00:40:36] We take advantage of all the cores we have. So we extract as much parallelism as possible
+[00:40:36 -> 00:40:42] from our program. So the advantage of having fine-grained thread granularity
+[00:40:42 -> 00:40:48] is that it provides the hardware with as many threads as possible to fully utilize
+[00:40:48 -> 00:40:53] the resources. Now, what happens if we provide hardware with all these threads,
+[00:40:53 -> 00:40:59] but the hardware actually has less resources than the threads that we gave it?
+[00:40:59 -> 00:41:02] What does the hardware do? We wait.
+[00:41:03 -> 00:41:08] Right. They wait until there are resources for them to execute.
+[00:41:08 -> 00:41:12] So if there are more threads provided than the GPU can support,
+[00:41:12 -> 00:41:16] then the hardware can serialize this work with low overhead.
+[00:41:17 -> 00:41:22] But if I did not provide it with all the parallelism I had,
+[00:41:22 -> 00:41:27] if I provided with less parallelism, the problem is that if I have a future device
+[00:41:29 -> 00:41:33] that has more resources, then it won't be able to extract more parallelism.
+[00:41:33 -> 00:41:37] But by providing it all the parallelism that's available in my program,
+[00:41:37 -> 00:41:42] in the future, if I get a new GPU that comes out and that GPU has more resources,
+[00:41:43 -> 00:41:49] then the hardware can easily extract more parallelism without me having to rewrite the
+[00:41:49 -> 00:41:53] code. And remember, we gave this a name. We call this transparent scalability.
+[00:41:53 -> 00:41:58] This idea that if I have less resources, the hardware serializes the threads for me,
+[00:41:58 -> 00:42:01] and if I have more resources, then the hardware can parallelize the threads.
+[00:42:02 -> 00:42:06] So giving the hardware as many threads as possible gives it the flexibility
+[00:42:07 -> 00:42:11] to parallelize them if it has enough resources or serialize them if it doesn't.
+[00:42:11 -> 00:42:14] Now, what is the disadvantage? Is there a disadvantage to this?
+[00:42:15 -> 00:42:19] Is there a disadvantage of me giving the hardware as many threads as possible?
+[00:42:40 -> 00:42:45] Lower operation per byte ratio. I'm not sure what you mean by that.
+[00:42:46 -> 00:42:50] Actually, it could be that. But remember, we calculated operations
+[00:42:51 -> 00:42:56] at the same level. So every thread was doing a certain number of operations per byte.
+[00:42:56 -> 00:43:01] So if I have more threads, each of them is going to do more operations but also load more data.
+[00:43:01 -> 00:43:07] So the operation doesn't get affected directly, but we will see actually today
+[00:43:07 -> 00:43:18] how it can be affected indirectly. If the thread does way too little work,
+[00:43:18 -> 00:43:21] wouldn't the overhead become very significant?
+[00:43:22 -> 00:43:28] So again, we said that the hardware actually can schedule these threads with very low overhead.
+[00:43:28 -> 00:43:35] The hardware is pretty good at that. The disadvantage actually, it's something you guys
+[00:43:35 -> 00:43:40] are kind of alluding to, which is that if there are common operations that are performed
+[00:43:40 -> 00:43:48] redundantly across threads, when I run these threads in parallel, that's okay.
+[00:43:50 -> 00:43:54] Because that redundancy is a price that I'm paying to get parallelism.
+[00:43:56 -> 00:44:01] So it's okay if the threads are actually running in parallel, but if the threads are actually
+[00:44:01 -> 00:44:07] going to be running sequentially, so if I have this redundancy across threads, so there's an
+[00:44:07 -> 00:44:12] operation that performed redundantly across threads, if these threads are actually going
+[00:44:12 -> 00:44:18] to end up being serialized by the hardware, then this is suboptimal because I'm paying
+[00:44:18 -> 00:44:22] this redundancy in order for me to get parallelism, but then I'm losing,
+[00:44:23 -> 00:44:27] I'm not getting that parallelism because the hardware is serializing the work anyways.
+[00:44:28 -> 00:44:32] So let me give an example of what I mean by that.
+[00:44:32 -> 00:44:41] So here, if you remember with our tiled matrix, matrix multiplication, what we had is we had every
+[00:44:41 -> 00:44:49] thread block responsible for a tile in the output matrix, and each thread in that thread
+[00:44:49 -> 00:44:54] block was responsible for one element inside of this output matrix, and these threads
+[00:44:54 -> 00:45:01] collaborated to load input tiles. Now, if you'll notice,
+[00:45:01 -> 00:45:07] what you'll see is that these two thread blocks that are horizontally adjacent to each other,
+[00:45:08 -> 00:45:18] these thread blocks load different tiles of B, but they load the same tile of A.
+[00:45:20 -> 00:45:24] So thread blocks processing horizontally adjacent output tiles,
+[00:45:24 -> 00:45:28] redundantly load the same tile of A. So here, this thread block is going to go on some SM
+[00:45:28 -> 00:45:33] and load this tile of A, and this thread block is going to go maybe on the same SM or maybe on a
+[00:45:33 -> 00:45:42] different SM, and it's also going to load that same tile of A. So this loading of having both
+[00:45:42 -> 00:45:48] threads load, both thread blocks load A is redundant. Now, if these two thread blocks are
+[00:45:48 -> 00:45:54] actually running on parallel on different SMs and loading A at the same time, then that's
+[00:45:54 -> 00:45:59] okay, because this redundancy is a price that I paid in order for me to be able to compute these
+[00:45:59 -> 00:46:07] output tiles in parallel. However, if my hardware actually ends up, if I get my hardware too many
+[00:46:07 -> 00:46:11] thread blocks and my hardware actually ends up serializing these two thread blocks,
+[00:46:12 -> 00:46:15] then what's going to happen is that this thread block is going to run, it's going to load
+[00:46:15 -> 00:46:21] this tile of A and then load this tile of B and compute this part, and then
+[00:46:22 -> 00:46:28] much later, this other thread block is going to come and it's going to load this tile of A
+[00:46:28 -> 00:46:35] and load this other tile of B and compute the output. So in this case, if my hardware is going
+[00:46:35 -> 00:46:40] to serialize it, is there a benefit for me to serialize it instead in the code?
+[00:46:48 -> 00:46:53] Yes, I save loading the tile twice, but then I have to make sure it fits in the shared memory.
+[00:46:54 -> 00:47:03] Right, exactly. So if we know that we're providing the hardware with too many thread blocks and it
+[00:47:03 -> 00:47:09] can run at the same time, what we can do is rather than load this A redundantly for these
+[00:47:09 -> 00:47:15] two output blocks, we can assign one thread block to be responsible for this output block
+[00:47:15 -> 00:47:20] and this output block, and we can have this thread block first load this block
+[00:47:21 -> 00:47:27] and this block and compute the partial tile. And then before proceeding, it can go and it can,
+[00:47:27 -> 00:47:34] using the same tile of A, load this thread block and compute this partial output tile.
+[00:47:34 -> 00:47:41] So we can have one thread block process multiple output tiles sequentially and reuse
+[00:47:41 -> 00:47:50] the input tile that it loaded. Okay, so this is an advantage of thread coarsening.
+[00:47:51 -> 00:47:56] If these two, the thread blocks processing these two tiles were actually running in parallel,
+[00:47:56 -> 00:48:00] great, redundancy is worth it. But if they're going to get sequentialized,
+[00:48:00 -> 00:48:06] then I prefer to get rid of this redundancy and load A only once and use it for both of
+[00:48:06 -> 00:48:09] these output tiles. Okay, is that clear? Any questions about this?
+[00:48:15 -> 00:48:18] So, sorry. Yes, go ahead.
+[00:48:19 -> 00:48:24] Does that depend on the number of cores and GPU and your hardware?
+[00:48:25 -> 00:48:30] Yes, of course it does. Of course it does. So whether or not these, the two thread blocks
+[00:48:30 -> 00:48:35] here will run sequentially or in parallel is going to depend on how many SMs I have in my
+[00:48:35 -> 00:48:41] GPU. If I have many SMs in my GPU because I have a very strong GPU that I pay thousands
+[00:48:41 -> 00:48:46] of dollars for, then maybe these blocks run in parallel. But if I have a small GPU,
+[00:48:47 -> 00:48:53] then maybe that's just like sitting there in my laptop managing my screen, then maybe these
+[00:48:53 -> 00:48:59] blocks are more likely to run sequentially. Okay, so it does depend on your hardware.
+[00:48:59 -> 00:49:05] And I will talk about that. So how much we serialize depends on how much hardware we have.
+[00:49:05 -> 00:49:14] So it's going to be data dependent. Okay, so let's see how to actually implement this.
+[00:49:14 -> 00:49:19] So what I want to do now is I want to make one thread block responsible for multiple
+[00:49:19 -> 00:49:24] output files. And in other words, I want to make one thread responsible for multiple output
+[00:49:24 -> 00:49:28] elements instead of just one. So I'm going to have the thread responsible for this output
+[00:49:28 -> 00:49:36] element also be responsible for this output element over here. Okay, so let's go to the
+[00:49:36 -> 00:49:44] code and write this code. So this is the matrix multiplication code that we wrote before,
+[00:49:44 -> 00:49:47] the top matrix multiplication code we wrote before. I'm going to compile it and I'm going
+[00:49:47 -> 00:49:53] to run it so you guys can remember how long it took. Here the kernel time was 0.91 milliseconds.
+[00:49:54 -> 00:49:58] And I'm going to open this kernel code. And you'll notice here's what we did before.
+[00:49:59 -> 00:50:04] We declared these shared tiles, we found a row index or column index, initialize or sum to
+[00:50:04 -> 00:50:10] zero. We looped over the tiles and then over the input tiles. And for every input tile,
+[00:50:10 -> 00:50:14] we loaded the tile of A, we loaded the tile of B. Sync threads was make sure that all
+[00:50:14 -> 00:50:18] threads finish loading before any of them start computing. And then we looped over the
+[00:50:18 -> 00:50:23] tiles and computed a partial sum. And then we just sync threads again to make sure everybody
+[00:50:23 -> 00:50:27] finishes computing before we load the new values. And we keep looping through our input tiles
+[00:50:27 -> 00:50:31] until we're done and restore the results. So this is the code that we wrote last time.
+[00:50:31 -> 00:50:37] And what I'd like to do is I'd like to modify this code in order for me to accomplish this
+[00:50:37 -> 00:50:43] idea that we have one thread block responsible for multiple output tiles. Okay.
+[00:50:44 -> 00:50:49] So to do that, I'm going to start by defining something called my coarsening factor. My
+[00:50:49 -> 00:50:54] coarsening factor is going to be how many units of parallelism is every thread going
+[00:50:54 -> 00:50:58] to be responsible for. Originally, every thread was going to be responsible for one,
+[00:50:58 -> 00:51:03] but I want it to be kind of an arbitrary value. So I'm going to call this coarse
+[00:51:03 -> 00:51:07] factor. And let's just set it to four. So let's say that every thread is going
+[00:51:07 -> 00:51:13] to be responsible for four output elements. And in other words, every thread block is
+[00:51:13 -> 00:51:18] going to be responsible for four horizontally adjacent output tiles. Okay.
+[00:51:20 -> 00:51:24] So what do I need to do now? Well, now a row still makes sense because here
+[00:51:26 -> 00:51:31] that processing this row, processing this element now is processing this element and
+[00:51:31 -> 00:51:36] this element. So they both have the same row. So this row variable still makes sense.
+[00:51:36 -> 00:51:41] But this column variable is now a little bit weird because now we don't just have,
+[00:51:41 -> 00:51:45] a thread doesn't just have one column. It has a column for each of the elements
+[00:51:45 -> 00:51:52] that it is responsible for. Okay. So what I'm going to do is I'm going to start by
+[00:51:52 -> 00:51:57] finding the column index for the first element it's responsible for. And then later on we'll
+[00:51:58 -> 00:52:03] proceed to kind of go to the following thread blocks. So now the column index,
+[00:52:03 -> 00:52:06] and I'm not going to call this call anymore. I'm going to call it
+[00:52:06 -> 00:52:14] a call part, meaning it's the column index for the first element the thread is responsible for.
+[00:52:14 -> 00:52:18] And now what do I have to change in this calculation over here?
+[00:52:18 -> 00:52:23] So now every thread block is not just responsible for tile dim elements,
+[00:52:23 -> 00:52:28] it's going to be responsible for tile dim elements times the coarsening factor.
+[00:52:28 -> 00:52:35] So here the thread block was responsible before for four elements. Now if I have
+[00:52:35 -> 00:52:39] a coarsening factor of two, the thread block is responsible for eight elements.
+[00:52:39 -> 00:52:45] So to find the first column a thread block is responsible for, I need to have block index
+[00:52:45 -> 00:52:53] dot x times block dim dot x times the coarsening factor. Okay. Here I'm going to have
+[00:52:55 -> 00:53:16] times the coarsening. Okay. Okay. So after I put the coarsening factor here,
+[00:53:16 -> 00:53:23] now I know where every column starts, sorry, where the start column for every thread.
+[00:53:23 -> 00:53:31] Okay. Next thing I need to do is I was initializing some before, but now every thread
+[00:53:31 -> 00:53:36] actually has multiple sums, right? So now the thread responsible for this output element is
+[00:53:36 -> 00:53:41] also responsible for this output element. So it's going to partially accumulate to this sum
+[00:53:41 -> 00:53:45] and then partially accumulate to this sum. And then it's going to load the next tile of B
+[00:53:45 -> 00:53:49] and the next tile of A and it's going to partially accumulate to this sum and then to this sum.
+[00:53:49 -> 00:53:54] So now rather than each thread being responsible for one element, it's responsible for coarse
+[00:53:54 -> 00:54:01] factor elements. So here sum is no longer going to be a local variable. Sum is going to be
+[00:54:02 -> 00:54:10] array whose size is coarse factor. Okay. And now I want to initialize each of these to zero.
+[00:54:10 -> 00:54:18] So what I need to do is I need to loop over for unsigned and C equals zero. C is less than
+[00:54:18 -> 00:54:32] the coarsening factor plus plus C. Okay. And then over here I'm going to initialize sum of C to zero.
+[00:54:33 -> 00:54:43] Okay. Now I've initialized the sum for all the elements the thread is responsible for to zero.
+[00:54:43 -> 00:54:48] Okay. Now what do I do? Now I'm going to loop over my tiles. So this outer loop over here loops
+[00:54:48 -> 00:55:00] over these input tiles. Now for every input tile I need to do is I need to load an input tile A
+[00:55:01 -> 00:55:08] and then I need to load multiple input tiles for B. Okay. So if we go back to the
+[00:55:08 -> 00:55:14] code, over here I was loading one input tile of A and one input tile of B,
+[00:55:14 -> 00:55:27] but now I need to load multiple input tiles of B. In order for me to load multiple tiles of B
+[00:55:27 -> 00:55:32] and process them, what I'm going to have to do is I'm going to have to now insert a loop
+[00:55:33 -> 00:55:39] that loops over the tiles of B and then does the sum. Okay. So here I load the tile of A
+[00:55:39 -> 00:55:43] and then I'm going to have a loop that loads a tile of B and then computes and then loads
+[00:55:43 -> 00:55:47] another tile of B and then computes and then loads a third tile of B and then computes, etc.
+[00:55:48 -> 00:56:03] Okay. So here what I will do is I will loop over here for unsigned and C equals zero.
+[00:56:05 -> 00:56:14] C is less than the coarsening factor. Okay. Plus plus C. And now what this loop is going to do
+[00:56:14 -> 00:56:23] is going to loop over all this stuff. Okay. So this loop is going to load a tile of B,
+[00:56:23 -> 00:56:28] sync threads and then do the partial sum and then sync threads and then load the second
+[00:56:28 -> 00:56:33] tile of B, then do the partial sum for that and then sync threads, etc. Okay.
+[00:56:33 -> 00:56:38] But now what I need to do is when I'm loading this tile of B, I'm using the column of the
+[00:56:38 -> 00:56:43] thread and I need to make sure to set the column of the thread correctly. Okay.
+[00:56:43 -> 00:56:48] So the thread that's crossing this element over here is going to have a column value.
+[00:56:49 -> 00:56:54] When it goes to the next value of C, it's going to have another column value.
+[00:56:54 -> 00:56:56] And when it goes to the next value of C, it's going to have another column value.
+[00:56:56 -> 00:57:03] That column value is going to depend on C. Okay. So here what I need to do is I need
+[00:57:03 -> 00:57:10] to figure out for each value of C, so for each step in the coarsening loop,
+[00:57:10 -> 00:57:23] what column the thread is responsible for. Okay. So to figure out the column index,
+[00:57:23 -> 00:57:30] I write unsigned int call is equal to, and then I have the column that I started from,
+[00:57:30 -> 00:57:42] so call start. Okay. So for the first element, that value is just going to be call start.
+[00:57:43 -> 00:57:48] Okay. For the first value of the coarsening factor, when C is one,
+[00:57:48 -> 00:57:55] that value is going to be call start plus that width of an entire tile. Okay. Et cetera.
+[00:57:55 -> 00:58:02] So here we're call start plus the coarsening factor times the width of an entire tile.
+[00:58:02 -> 00:58:06] It's going to be call start plus C times tiled in. Is that clear?
+[00:58:10 -> 00:58:15] So here this loop, this coarsening loop is going to loop over our different tiles.
+[00:58:16 -> 00:58:20] Okay. And every time it's going to have a different column index.
+[00:58:20 -> 00:58:24] And then everything else is going to be the same. So here when we load from B,
+[00:58:24 -> 00:58:28] it's going to be the same thing, right? All this code is still valid. We sync threads,
+[00:58:28 -> 00:58:33] and then we loop over this, and then we multiply the tiles of A with the tile of B.
+[00:58:33 -> 00:58:40] Okay. But then here, when we have the sum, okay, the sum over here now is an array.
+[00:58:40 -> 00:58:45] So we need to make sure that we pick the right sum. So it's going to be sum of C.
+[00:58:45 -> 00:58:50] So now we have a loop that loops over the input tile. And then for every input tile of A,
+[00:58:50 -> 00:58:58] we loop over multiple input tiles of B. Okay. And we compute using those input tiles.
+[00:58:59 -> 00:59:04] Okay. And then finally, when we are done with all of this, now we are done.
+[00:59:04 -> 00:59:08] All the sums are ready, but now we have multiple sums that we need to write out.
+[00:59:08 -> 00:59:14] So again, we're going to loop over, we're going to have this coarsening loop that loops over all
+[00:59:15 -> 00:59:22] our output values that we need to write out. And we're going to write them out.
+[00:59:25 -> 00:59:28] Okay. But of course, over here, we're going to need the value of the column.
+[00:59:29 -> 00:59:33] And here the value of the column is going to be calculated in the same way we did it before.
+[00:59:33 -> 00:59:37] It's going to be call start plus C times tile of them. And of course,
+[00:59:37 -> 00:59:39] here we have multiple values of sums. So this is going to be sum of C.
+[00:59:39 -> 00:59:46] So by doing this, what we have done is we've applied thread coarsening to our
+[00:59:48 -> 00:59:53] tile matrix multiplication kernel in order for us to reuse the same tile of A that we
+[00:59:53 -> 01:00:00] loaded for multiple tiles of B. And let's now compile this code. Okay. And now we can run it.
+[01:00:02 -> 01:00:08] And we have a mismatch. So let me go and figure out where this mismatch is.
+[01:00:08 -> 01:00:13] Professor, can you change the block dimension?
+[01:00:14 -> 01:00:20] Yes, thank you. That's what I forgot. So before when we were loading this, now
+[01:00:22 -> 01:00:27] we had a certain number of thread blocks. Now we have to divide this number of thread blocks
+[01:00:27 -> 01:00:32] by the block dimension. So you're absolutely right. That's what we forgot.
+[01:00:33 -> 01:00:37] We have to change the block dimension. So we're going to come down here in the
+[01:00:37 -> 01:00:44] code that was launching. Okay. And we need to divide the number of thread blocks in the
+[01:00:44 -> 01:00:52] X dimension by the coarsening. Okay. So once we do that, hopefully that'll work.
+[01:00:55 -> 01:00:59] Okay. There we go. It worked. So you're right. Thank you for that correction.
+[01:00:59 -> 01:01:05] So now you'll see that the time has improved. So before it was 0.91 milliseconds,
+[01:01:05 -> 01:01:12] and now it's 0.87 milliseconds. Okay. And here the performance improvement is okay.
+[01:01:12 -> 01:01:16] We can experiment with different coarsening factors. So for example, let's try a
+[01:01:16 -> 01:01:21] larger coarsening factor. So maybe we have, rather than four, we can have a factor of 16.
+[01:01:22 -> 01:01:30] And this may help performance or may hurt performance. Let's try this. Okay.
+[01:01:30 -> 01:01:34] And you'll notice that this time it hurt performance because now we have too much
+[01:01:34 -> 01:01:38] serialization. Okay. So depending on the GPU that you're running on,
+[01:01:38 -> 01:01:45] different coarsening factors may be better or worse. So this is here the code that we wrote.
+[01:01:46 -> 01:01:51] So thread coarsening is basically an optimization where a thread is assigned to multiple units
+[01:01:51 -> 01:01:55] of parallelism. In other words, we make the thread more coarse grain. The advantages
+[01:01:55 -> 01:02:00] of thread coarsening are is that it reduces the price paid for parallelization. And the
+[01:02:00 -> 01:02:05] example we did today, what this did is it reduced the redundant memory loads from the
+[01:02:05 -> 01:02:09] child matrix multiplication, but it may reduce other things. We could reduce the redundant
+[01:02:09 -> 01:02:15] computations, for example. So if multiple blocks do some redundant computation and
+[01:02:15 -> 01:02:19] that's the price we paid for parallelism, then we can do that redundant computation once
+[01:02:19 -> 01:02:24] and use it for multiple thread. And also it could reduce something like synchronization
+[01:02:24 -> 01:02:28] or divergence. So if the price that I paid for parallelization was synchronization or
+[01:02:28 -> 01:02:34] control divergence, then it would reduce that cost for me too. Okay. The disadvantages of thread
+[01:02:34 -> 01:02:39] coarsening are like we saw. So when I increased the thread coarsening factor from four to 16,
+[01:02:39 -> 01:02:45] I actually ended up hurting performance. So we may underutilize resources if the coarsening
+[01:02:45 -> 01:02:50] factor is too high. Okay. And what that means is that we need to retune the coarsening factor
+[01:02:50 -> 01:02:54] for every device because different devices have different amounts of resources. So different
+[01:02:54 -> 01:02:59] devices will have different coarsening factors. So I'm no longer benefiting from this transparent
+[01:02:59 -> 01:03:03] scalability because I'm interfering with the transparent scalability when I apply a thread
+[01:03:03 -> 01:03:08] coarsening. So these are the advantages and disadvantages of thread coarsening. Another
+[01:03:08 -> 01:03:13] disadvantage of thread coarsening is that we have more resources per thread. So now in our
+[01:03:13 -> 01:03:19] code over here, a thread now is using more resources because it needs to maintain more
+[01:03:20 -> 01:03:30] values. Sorry, more memory here in order for it to store all the different partial results.
+[01:03:30 -> 01:03:34] Okay. We need more resources per thread. And if we use too many resources per thread,
+[01:03:34 -> 01:03:42] this may limit occupancy. All right. So having covered that, this is a checklist of the
+[01:03:42 -> 01:03:46] optimizations we've looked at so far. Tuning resources to maximize occupancy,
+[01:03:47 -> 01:03:52] minimizing control divergence, having a uniform access pattern so that we have memory coalescing,
+[01:03:53 -> 01:03:59] shared memory tiling to capture data reuse and thread coarsening to mitigate the price
+[01:03:59 -> 01:04:02] of parallelization. And this on the left here shows you the impact of each of these
+[01:04:02 -> 01:04:07] optimizations on the cores and on memory. There's one more optimization we didn't talk
+[01:04:07 -> 01:04:12] about yet, and we will talk about it in a few lectures from now, and that's privatization.
+[01:04:12 -> 01:04:17] Privatization is an optimization we'll cover later, but it basically tackles the case when
+[01:04:17 -> 01:04:23] we have different threads contending on the common output. Okay. And with this checklist
+[01:04:23 -> 01:04:30] of common optimizations, with these six different optimizations that we have in this list,
+[01:04:30 -> 01:04:35] this covers a wide range of the different optimizations that we cover, that we apply
+[01:04:35 -> 01:04:41] when doing GPU computing. And throughout this, throughout kind of in the second part of the
+[01:04:41 -> 01:04:45] course, we're going to go through many different parallel patterns and we're going to parallelize
+[01:04:45 -> 01:04:49] them. And when we parallelize these parallel patterns, we'll pass by this checklist and
+[01:04:49 -> 01:04:53] we'll see which of these optimizations apply to those parallel patterns. And we will see how
+[01:04:53 -> 01:05:02] we can apply these optimizations in the different contexts. It's important to note that
+[01:05:02 -> 01:05:07] sometimes there's a tension between optimizations. So for example, when I maximize occupancy,
+[01:05:07 -> 01:05:13] sometimes if my occupancy is too high and my threads use a lot of memory, having too many
+[01:05:13 -> 01:05:18] threads, these threads start competing for the cache and they might evict each other's data out.
+[01:05:18 -> 01:05:24] So there's a tension between maximizing occupancy but also controlling the thrashing
+[01:05:24 -> 01:05:30] of my cache. So sometimes what people like to do is not to maximize occupancy, but try to
+[01:05:30 -> 01:05:36] limit occupancy a little bit if they know that the threads are thrashing each other's
+[01:05:36 -> 01:05:42] data out of the cache. So sometimes you have to kind of make that balance between
+[01:05:42 -> 01:05:46] different optimizations. Another example is shared memory tiling. If I use a lot of shared memory,
+[01:05:46 -> 01:05:50] it helps me enable more data reuse. But then if I use too much shared memory,
+[01:05:50 -> 01:05:55] it might limit my occupancy because the SM doesn't have enough shared memory to
+[01:05:56 -> 01:06:01] fully utilize all the threads that it could have scheduled. Another example is thread
+[01:06:01 -> 01:06:06] coarsening where coarsening reduces redundant work, but it requires more resources. So if I do
+[01:06:06 -> 01:06:11] too much coarsening, I may end up limiting occupancy as well. So it's important for us
+[01:06:11 -> 01:06:16] to find a sweet spot that achieves the best compromise. And also it's important for you
+[01:06:16 -> 01:06:20] to know what your bottleneck is. You need to know what your bottleneck is because you
+[01:06:20 -> 01:06:26] don't want to optimize for the wrong thing. So the constraint that limits your performance,
+[01:06:27 -> 01:06:34] the performance of the application is called a bottleneck. And the bottleneck depends on the
+[01:06:34 -> 01:06:40] application as well as the device. Sometimes what might be limiting your application is
+[01:06:43 -> 01:06:48] the data reuse or the memory bandwidth. Sometimes what might limit your performance
+[01:06:48 -> 01:06:52] is output contention. Sometimes what might limit your performance is occupancy. Sometimes
+[01:06:52 -> 01:06:57] what might limit your performance is control divergence. If control divergence is what's
+[01:06:57 -> 01:07:02] limiting your performance, then you don't want to go apply shared memory tiling because you're
+[01:07:02 -> 01:07:06] tackling the wrong bottleneck. If your performance is limited by control divergence, you want to
+[01:07:06 -> 01:07:12] go and try to minimize the divergence. So it's important when we apply optimizations,
+[01:07:12 -> 01:07:17] we trade one resources for another to alleviate the bottleneck. So it's important for us to
+[01:07:17 -> 01:07:22] know what our bottleneck is. So to properly diagnose our application, the bottleneck of
+[01:07:22 -> 01:07:30] our application before we select what optimization to apply. Because if we have some
+[01:07:30 -> 01:07:36] bottleneck and we apply a different optimization, we might be optimizing for the wrong resource
+[01:07:36 -> 01:07:40] and we might not get any performance or worse, we might even hurt performance.
+[01:07:44 -> 01:07:48] Having said that, you can read more about what we covered today in chapter five of the
+[01:07:48 -> 01:07:53] course. And I'd be happy to take any final questions. Does anybody have any final questions?
+[01:07:55 -> 01:08:00] Okay, if there are no other questions, then that's all for today and I'll see you next week.
+[01:08:00 -> 01:08:08] Bye everyone.
