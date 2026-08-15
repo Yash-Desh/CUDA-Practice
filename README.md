@@ -14,10 +14,12 @@ CUDA
 3. What is a GEMM ? --> [Matrix Multiplication Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html)
 4. What is GFLOPs ? How is it calculated ? 
 5. What is arithmetic intensity ? How is it calculated ? 
+6. When does occupancy not relate to better performance ? 
 
 
 
 OpenMP
 1. [OpenMP][L9] What are thread pools ? 
 2. [OpenMP][L9] What is OpenMP run time library ? 
+3. What is a loop-carried dependency ? 
 
