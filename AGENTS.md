@@ -9,7 +9,7 @@ file is a self-contained example, numbered by topic.
   directories (`00_basics/`, `01_vecadd/`, `02_image/`, `03_matmul/`, `04_convolution/`,
   `05_stencil/`, `06_reduction/`, `07_scan/`, `08_histogram/`).
 - `1_parallel_patterns/00_basics/template.cu` — starting point / boilerplate for new examples.
-- `2_ece759_In-Class_Examples/` — course in-class examples (`CUDA/`, `OpenMP/`).
+- `2_ece759_In-Class_Examples/` — course in-class examples (`1_OpenMP/`, `2_CUDA/`).
 - `3_reading_material/` — reference PDFs and course material (not code), split into
   `1_UW_ece759/`, `2_CUDA_Course/`, `3_Nvidia_specific/`, and `4_AMD_specific/`.
 - `4_interview_prep/` — topic summaries written for interview review.
