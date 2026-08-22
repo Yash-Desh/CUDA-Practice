@@ -304,7 +304,7 @@ Worth knowing for the follow-up interview question:
   occurs when there are not enough registers available for a given task"; occupancy vs.
   register spilling to local memory; `-maxrregcount` and `__launch_bounds__`):
   https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#register-pressure
-- Course deck: `reading_material/UW_ece759/17 kernel-scheduling.pdf`, p. 38 — "A thread can
+- Course deck: `3_reading_material/1_UW_ece759/18_kernel-scheduling.pdf`, p. 38 — "A thread can
   have assigned by the compiler up to 255 registers – anything beyond will cause the
   compilation to fail"; also "Registers are dynamically partitioned across all Blocks and
   assigned to the SM" (the runtime partitioning / occupancy step); p. 37 — what "register"
@@ -329,10 +329,10 @@ Worth knowing for the follow-up interview question:
   it. (The classic runtime message string is "too many resources requested for launch.")
   Verified 2026-07-26.
   https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html
-- Course deck: `reading_material/UW_ece759/18 shared-memory-and-thread-synchronization.pdf`,
+- Course deck: `3_reading_material/1_UW_ece759/19_shared-memory-and-thread-synchronization.pdf`,
   p. 12 — "Register spill, if too many registers are needed ... (high register pressure)";
   p. 18 — registers "can spill into local memory and global memory (operated by runtime)".
-- Course deck: `reading_material/UW_ece759/20 occupancy.pdf`, p. 26 — register file size per
+- Course deck: `3_reading_material/1_UW_ece759/21_occupancy.pdf`, p. 26 — register file size per
   SM (64K 4-byte registers on Kepler/Maxwell/Pascal/Volta/Ampere) as an occupancy limiter;
   p. 31 — "Occupancy != Performance [yet a pretty good proxy]"; low-occupancy SMs struggle to
   hide latency on memory-bound kernels.
